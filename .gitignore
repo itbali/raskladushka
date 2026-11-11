@@ -1,0 +1,14 @@
+.DS_Store
+build/
+.build/
+DerivedData/
+xcuserdata/
+*.xcarchive
+*.xcodeproj
+Tools/appstore/config.env
+*.p8
+*.p12
+*.mobileprovision
+*.provisionprofile
+.env
+__pycache__/
