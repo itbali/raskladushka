@@ -126,6 +126,7 @@ final class AppState: ObservableObject {
         if listen != canListenEvents { canListenEvents = listen }
         if running != tapRunning { tapRunning = running }
         if count != layoutCount { layoutCount = count }
+        injector.bypassSessionTaps = tap.isActive
         if tap.isActive != capturing { applyHotKey() }
         syncUndoKey()
     }

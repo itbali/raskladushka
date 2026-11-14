@@ -9,6 +9,11 @@ final class TextInjector {
         return source
     }()
 
+    /// Отправлять нажатия в обход перехватчиков сессии. Нужно, когда наш собственный перехватчик активный:
+    /// иначе каждое наше нажатие ждёт в нём, пока освободится главный поток, — а тот как раз занят
+    /// отправкой и ожиданием ответа (⌘C не доходил до приложения, и выделение не переводилось).
+    var bypassSessionTaps = false
+
     private func post(keyCode: CGKeyCode, flags: CGEventFlags = [], text: String? = nil) {
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down) else { continue }
@@ -18,7 +23,7 @@ final class TextInjector {
                 event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
             }
             event.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
-            event.post(tap: .cgSessionEventTap)
+            event.post(tap: bypassSessionTaps ? .cgAnnotatedSessionEventTap : .cgSessionEventTap)
         }
         usleep(3_000)
     }
