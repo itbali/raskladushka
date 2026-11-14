@@ -61,14 +61,23 @@ struct KeyCombo: Equatable, Codable {
 /// Глобальная горячая клавиша через Carbon — не требует никаких разрешений.
 final class HotKey {
     var action: (() -> Void)?
+    /// Номер сочетания: по нему обработчик отличает своё нажатие от чужого.
+    private let id: UInt32
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
 
-    init() {
+    var isRegistered: Bool { hotKeyRef != nil }
+
+    init(id: UInt32 = 1) {
+        self.id = id
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, userData in
-            guard let userData else { return noErr }
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, userData in
+            guard let userData, let event else { return OSStatus(eventNotHandledErr) }
             let hotKey = Unmanaged<HotKey>.fromOpaque(userData).takeUnretainedValue()
+            var pressed = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                              nil, MemoryLayout<EventHotKeyID>.size, nil, &pressed)
+            guard pressed.id == hotKey.id else { return OSStatus(eventNotHandledErr) }
             DispatchQueue.main.async { hotKey.action?() }
             return noErr
         }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handlerRef)
@@ -79,8 +88,8 @@ final class HotKey {
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
         hotKeyRef = nil
         guard let combo else { return true }
-        let id = EventHotKeyID(signature: OSType(0x5241_534B), id: 1)
-        let status = RegisterEventHotKey(UInt32(combo.keyCode), combo.carbonModifiers, id,
+        let hotKeyID = EventHotKeyID(signature: OSType(0x5241_534B), id: id)
+        let status = RegisterEventHotKey(UInt32(combo.keyCode), combo.carbonModifiers, hotKeyID,
                                          GetApplicationEventTarget(), 0, &hotKeyRef)
         return status == noErr
     }

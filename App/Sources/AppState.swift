@@ -34,6 +34,10 @@ final class AppState: ObservableObject {
     private let tap = KeyboardTap()
     private let injector = TextInjector()
     private let hotKey = HotKey()
+    /// ⌘Z сразу после замены. Сочетание занято только пока есть что возвращать — в остальное время
+    /// ⌘Z идёт в приложение как обычно.
+    private let undoKey = HotKey(id: 2)
+    private static let undoCombo = KeyCombo(keyCode: 6, modifiers: NSEvent.ModifierFlags.command.rawValue)
     private let session: TypingSession
     private var timer: Timer?
     private var askedListenAccess = false
@@ -53,11 +57,13 @@ final class AppState: ObservableObject {
     func start() {
         tap.handler = { [weak self] in self?.handle($0) }
         hotKey.action = { [weak self] in self?.hotKeyPressed() }
-        inputSources.onUserChangedLayout = { [weak self] in self?.session.reset() }
+        undoKey.action = { [weak self] in self?.undoPressed() }
+        inputSources.onUserChangedLayout = { [weak self] in self?.session.reset(); self?.syncUndoKey() }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
             self?.session.reset()
+            self?.syncUndoKey()
             if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                let id = app.bundleIdentifier, id != Bundle.main.bundleIdentifier {
                 self?.lastApp = (id, app.localizedName ?? id)
@@ -101,6 +107,7 @@ final class AppState: ObservableObject {
         if listen != canListenEvents { canListenEvents = listen }
         if running != tapRunning { tapRunning = running }
         if count != layoutCount { layoutCount = count }
+        syncUndoKey()
     }
 
     // MARK: Разрешения
@@ -159,6 +166,7 @@ final class AppState: ObservableObject {
     func toggleExcluded(_ bundleID: String) {
         if let index = excludedApps.firstIndex(of: bundleID) { excludedApps.remove(at: index) } else { excludedApps.append(bundleID) }
         session.reset()
+        syncUndoKey()
     }
 
     // MARK: Горячая клавиша
@@ -176,6 +184,21 @@ final class AppState: ObservableObject {
             return
         }
         convertSelection(context: context)
+    }
+
+    // MARK: Отмена по ⌘Z
+
+    /// Занимает ⌘Z, пока последнюю замену можно вернуть, и отпускает, как только нельзя.
+    /// Без работающего перехватчика не занимает вовсе: некому было бы заметить следующее нажатие.
+    private func syncUndoKey() {
+        let wanted = session.canUndo && tap.isRunning && combo != Self.undoCombo
+        if wanted != undoKey.isRegistered { undoKey.register(wanted ? Self.undoCombo : nil) }
+    }
+
+    private func undoPressed() {
+        defer { syncUndoKey() }
+        guard Self.hasPostAccess, let replacement = session.undoLast() else { return }
+        apply(replacement)
     }
 
     /// Терминалы: щелчок мышью не двигает курсор, а выделенный текст нельзя заменить вставкой.
@@ -222,6 +245,8 @@ final class AppState: ObservableObject {
                   let result = SelectionConverter.convert(text, context: context) else { return }
             injector.replace(deleteCount: text.count, with: result.text)
             inputSources.select(result.targetLayoutID)
+            session.rememberUndo(deleteCount: result.text.count, insert: text, switchTo: context.current.id)
+            syncUndoKey()
             return
         }
         guard !Self.looksLikeWholeLineCopy(text),
@@ -246,11 +271,14 @@ final class AppState: ObservableObject {
     // MARK: Нажатия
 
     private func handle(_ event: KeyboardTap.Event) {
+        defer { syncUndoKey() }
         switch event {
         case .mouseDown:
             if !frontmostIsTerminal { session.reset() }
         case .keyDown(let keyCode, let flags):
             if hotkeyEnabled, combo.matches(keyCode: keyCode, flags: flags) { return }
+            // Наш ⌘Z: замену вернёт обработчик сочетания, сессию до него не трогаем.
+            if undoKey.isRegistered, Self.undoCombo.matches(keyCode: keyCode, flags: flags) { return }
             guard !IsSecureEventInputEnabled(),
                   let context = inputSources.context(),
                   !isExcluded(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "")
@@ -280,5 +308,6 @@ final class AppState: ObservableObject {
         if let word = replacement.learnedException, !exceptions.contains(word) {
             exceptions.append(word)
         }
+        syncUndoKey()
     }
 }

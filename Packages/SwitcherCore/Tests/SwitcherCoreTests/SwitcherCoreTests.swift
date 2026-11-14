@@ -166,6 +166,60 @@ final class SwitcherCoreTests: XCTestCase {
         XCTAssertEqual(redo, Replacement(deleteCount: 7, insert: "привет ", switchTo: ru.id))
     }
 
+    // MARK: Отмена по ⌘Z
+
+    func testUndoAutoConversion() {
+        let s = TypingSession(detector: detector)
+        XCTAssertFalse(s.canUndo)
+        _ = type("ghbdtn ", layout: en, session: s, ctx: enCtx)
+        XCTAssertTrue(s.canUndo)
+        XCTAssertEqual(s.undoLast(),
+                       Replacement(deleteCount: 7, insert: "ghbdtn ", switchTo: en.id, learnedException: "ghbdtn"))
+        XCTAssertFalse(s.canUndo)
+        XCTAssertNil(s.undoLast())
+        XCTAssertEqual(s.tailText(context: enCtx), "ghbdtn ")
+    }
+
+    func testUndoReturnsRetroWordsAndKeepsThem() {
+        let s = TypingSession(detector: detector)
+        _ = type("z tot ljvjv ", layout: en, session: s, ctx: enCtx)
+        XCTAssertEqual(s.undoLast(),
+                       Replacement(deleteCount: 12, insert: "z tot ljvjv ", switchTo: en.id, learnedException: "ljvjv"))
+        // Возвращённые слова следующее уверенное слово с собой уже не утянет.
+        XCTAssertEqual(type("ghbdtn ", layout: en, session: s, ctx: enCtx),
+                       [Replacement(deleteCount: 7, insert: "привет ", switchTo: ru.id)])
+    }
+
+    func testUndoGoneAfterAnyKey() {
+        for event in [InputEvent.stroke(KeyStroke(keyCode: 0)), .stroke(KeyStroke(keyCode: 49)), .backspace, .reset] {
+            let s = TypingSession(detector: detector)
+            _ = type("ghbdtn ", layout: en, session: s, ctx: enCtx)
+            _ = s.handle(event, context: ruCtx)
+            XCTAssertFalse(s.canUndo)
+        }
+    }
+
+    func testUndoManualToggle() {
+        let s = TypingSession(detector: detector)
+        s.autoSwitchEnabled = false
+        _ = type("ghbd", layout: en, session: s, ctx: enCtx)
+        _ = s.manualToggle(context: enCtx)
+        XCTAssertEqual(s.undoLast(), Replacement(deleteCount: 4, insert: "ghbd", switchTo: en.id))
+        // Слово набрано до конца и переведено сочетанием: возвращаем его с пробелом.
+        _ = type("tn ", layout: en, session: s, ctx: enCtx)
+        _ = s.manualToggle(context: enCtx)
+        XCTAssertEqual(s.undoLast(), Replacement(deleteCount: 7, insert: "ghbdtn ", switchTo: en.id))
+        XCTAssertEqual(s.tailText(context: enCtx), "ghbdtn ")
+    }
+
+    func testUndoSelectionInTail() {
+        let s = TypingSession(detector: detector)
+        s.autoSwitchEnabled = false
+        _ = type("hello ghbdtn rfr ltkf", layout: en, session: s, ctx: enCtx)
+        _ = s.replaceInTail(selected: "ghbdtn rfr", context: enCtx)
+        XCTAssertEqual(s.undoLast(), Replacement(deleteCount: 15, insert: "ghbdtn rfr ltkf", switchTo: en.id))
+    }
+
     func testNothingToToggle() {
         let s = TypingSession(detector: detector)
         XCTAssertNil(s.manualToggle(context: enCtx))

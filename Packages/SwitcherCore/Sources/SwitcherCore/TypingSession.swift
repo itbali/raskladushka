@@ -44,6 +44,13 @@ public final class TypingSession {
     public var autoSwitchEnabled = true
     private var strokes: [KeyStroke] = []
     private var run: [Token] = []
+    /// Как вернуть последнюю замену: что стереть и набрать, и какими были слова до неё.
+    private struct Undo {
+        var replacement: Replacement
+        var first = 0
+        var tokens: [Token]?
+    }
+    private var undo: Undo?
     /// Сколько последних слов помним: нужно для отмены и для перевода выделенного «хвоста» в терминалах.
     private let maxRun = 60
 
@@ -53,12 +60,33 @@ public final class TypingSession {
 
     public var hasPendingWord: Bool { !strokes.isEmpty || !run.isEmpty }
 
+    /// Есть замена, которую ещё можно вернуть: после неё ничего не набрано и курсор не сдвинут.
+    public var canUndo: Bool { undo != nil }
+
+    /// Возврат последней замены — автоматической или по сочетанию. Слова возвращаются целиком,
+    /// вместе с исправленными задним числом, и больше не переводятся сами.
+    public func undoLast() -> Replacement? {
+        guard let undo else { return nil }
+        self.undo = nil
+        if let tokens = undo.tokens, undo.first <= run.count {
+            run.replaceSubrange(undo.first..., with: tokens)
+        }
+        return undo.replacement
+    }
+
+    /// Замена, сделанная мимо сессии (выделение в терминале): запоминаем, как её вернуть.
+    public func rememberUndo(deleteCount: Int, insert: String, switchTo: String) {
+        undo = Undo(replacement: Replacement(deleteCount: deleteCount, insert: insert, switchTo: switchTo))
+    }
+
     public func reset() {
+        undo = nil
         strokes.removeAll(keepingCapacity: true)
         run.removeAll(keepingCapacity: true)
     }
 
     public func handle(_ event: InputEvent, context: LayoutContext) -> Replacement? {
+        undo = nil
         switch event {
         case .reset:
             reset()
@@ -84,7 +112,16 @@ public final class TypingSession {
         var token = Token(strokes: strokes, displayed: typed, layoutID: context.current.id,
                           trailingSpaces: 1, originalTyped: typed)
         strokes.removeAll(keepingCapacity: true)
-        defer { if run.count > maxRun { run.removeFirst(run.count - maxRun) } }
+        defer {
+            let extra = run.count - maxRun
+            if extra > 0 {
+                run.removeFirst(extra)
+                if undo?.tokens != nil {
+                    undo!.first -= extra
+                    if undo!.first < 0 { undo = nil }
+                }
+            }
+        }
 
         guard autoSwitchEnabled,
               let found = detector.evaluate(strokes: token.strokes, current: context.current, others: context.others)
@@ -104,6 +141,7 @@ public final class TypingSession {
               !run[first - 1].locked, run[first - 1].layoutID == context.current.id {
             first -= 1
         }
+        var before = Array(run[first...]) + [token]
         var deleteCount = 0
         var insert = ""
         for i in first..<run.count {
@@ -123,6 +161,15 @@ public final class TypingSession {
         run.append(token)
         // Оставшиеся сомнения относились к старой раскладке — они больше не актуальны.
         for i in 0..<first { run[i].pending = nil }
+        var original = ""
+        for i in before.indices {
+            before[i].pending = nil
+            before[i].locked = true
+            original += before[i].displayed + String(repeating: " ", count: before[i].trailingSpaces)
+        }
+        undo = Undo(replacement: Replacement(deleteCount: insert.count, insert: original, switchTo: context.current.id,
+                                             learnedException: token.originalTyped.lowercased()),
+                    first: first, tokens: before)
         return Replacement(deleteCount: deleteCount, insert: insert, switchTo: found.layoutID)
     }
 
@@ -146,6 +193,8 @@ public final class TypingSession {
                                  insert: converted.text + tail[range.upperBound...],
                                  switchTo: converted.targetLayoutID)
         reset()
+        rememberUndo(deleteCount: result.insert.count, insert: String(tail[range.lowerBound...]),
+                     switchTo: context.current.id)
         return result
     }
 
@@ -156,6 +205,8 @@ public final class TypingSession {
             guard let typed = context.current.string(for: strokes) else { reset(); return nil }
             for target in context.others {
                 if let text = target.string(for: strokes) {
+                    undo = Undo(replacement: Replacement(deleteCount: text.count, insert: typed,
+                                                         switchTo: context.current.id))
                     return Replacement(deleteCount: typed.count, insert: text, switchTo: target.id)
                 }
             }
@@ -172,6 +223,12 @@ public final class TypingSession {
             if token.autoConverted, text == token.originalTyped {
                 result.learnedException = token.originalTyped.lowercased()
             }
+            var back = token
+            back.pending = nil
+            back.locked = true
+            undo = Undo(replacement: Replacement(deleteCount: result.insert.count, insert: token.displayed + spaces,
+                                                 switchTo: token.layoutID),
+                        first: run.count - 1, tokens: [back])
             token.displayed = text
             token.layoutID = target.id
             token.pending = nil

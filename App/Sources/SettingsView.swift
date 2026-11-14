@@ -17,7 +17,7 @@ struct SettingsView: View {
                     Label("Это сочетание занято другой программой — выберите другое.", systemImage: "exclamationmark.triangle")
                         .font(.footnote).foregroundStyle(.orange)
                 }
-                Text("Нажмите сочетание сразу после слова, чтобы перевести его или отменить автозамену. Если текст выделен — будет переведено выделение.")
+                Text("Нажмите сочетание сразу после слова, чтобы перевести его или отменить автозамену. Если текст выделен — будет переведено выделение. Любую замену сразу после неё отменяет ⌘Z.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Toggle("Запускать при входе в систему",
                        isOn: Binding(get: { state.launchAtLogin }, set: { state.setLaunchAtLogin($0) }))
@@ -58,7 +58,7 @@ struct SettingsView: View {
                                 .buttonStyle(.borderless)
                         }
                     }
-                    Text("Сюда попадают слова, автозамену которых вы отменили сочетанием клавиш.")
+                    Text("Сюда попадают слова, автозамену которых вы отменили сочетанием клавиш или ⌘Z.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

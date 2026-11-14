@@ -27,8 +27,33 @@ enum SelfTest {
         }
     }
 
+    /// `Raskladushka --typetest`: через 4 секунды сам печатает «руддщ » настоящими (непомеченными)
+    /// нажатиями в окно на переднем плане, затем дважды жмёт ⌘Z. Первое ⌘Z должно вернуть слово,
+    /// второе — уйти в приложение. Слово из исключений в конце убирает.
+    static func typeTestIfRequested() {
+        guard CommandLine.arguments.contains("--typetest") else { return }
+        func press(_ keyCode: CGKeyCode, _ flags: CGEventFlags = []) {
+            for down in [true, false] {
+                let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
+                event?.flags = flags
+                event?.post(tap: .cgSessionEventTap)
+                usleep(30_000)
+            }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 4) {
+            for key: CGKeyCode in [4, 14, 37, 37, 31, 49] { press(key) }
+            sleep(2)
+            press(6, .maskCommand)
+            sleep(2)
+            press(6, .maskCommand)
+            sleep(2)
+            DispatchQueue.main.async { AppState.shared.exceptions.removeAll { $0 == "руддщ" } }
+        }
+    }
+
     static func runIfRequested() {
         renderIfRequested()
+        typeTestIfRequested()
         guard CommandLine.arguments.contains("--selftest") else { return }
         let sources = InputSources()
         print("sandbox:", ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] ?? "no")
