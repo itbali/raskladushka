@@ -1,9 +1,10 @@
 #!/bin/bash
-# Сборка для скачивания с GitHub: подпись Developer ID, нотаризация Apple, zip.
-#   Tools/release-github.sh           — build/github/Raskladushka-<версия>.zip
+# Сборка для скачивания с GitHub: подпись Developer ID, нотаризация Apple, образ .dmg.
+#   Tools/release-github.sh           — build/github/Raskladushka-<версия>.dmg
 #   Tools/release-github.sh --draft   — то же и черновик релиза v<версия> на GitHub (нужен gh)
 # Настройки те же, что у Tools/release.sh: Tools/appstore/config.env. Ключ App Store Connect нужен
-# обязательно — им Xcode получает сертификат Developer ID, им же сборка отправляется на нотаризацию.
+# обязательно: им сборка отправляется на нотаризацию. Сертификат «Developer ID Application» должен
+# лежать в связке ключей.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -20,7 +21,7 @@ VERSION=$(sed -n 's/.*MARKETING_VERSION: "\(.*\)"/\1/p' project.yml)
 OUT=build/github
 ARCHIVE=build/Raskladushka-github.xcarchive
 APP=$OUT/export/Raskladushka.app
-ZIP=$OUT/Raskladushka-$VERSION.zip
+DMG=$OUT/Raskladushka-$VERSION.dmg
 
 xcodegen generate
 (cd Packages/SwitcherCore && swift test)
@@ -34,19 +35,33 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive -archivePa
   -exportPath "$OUT/export" -exportOptionsPlist AppStore/ExportOptions-developer-id.plist \
   -allowProvisioningUpdates "${AUTH[@]}"
 
-# Нотаризация: Apple проверяет сборку, квитанция прикрепляется к приложению.
+notarize() {
+  xcrun notarytool submit "$1" --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --wait
+}
+
+# Нотаризация приложения: Apple проверяет сборку, квитанция прикрепляется к приложению.
 ditto -c -k --keepParent "$APP" "$OUT/notarize.zip"
-xcrun notarytool submit "$OUT/notarize.zip" --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" \
-  --issuer "$ASC_ISSUER_ID" --wait
+notarize "$OUT/notarize.zip"
 rm "$OUT/notarize.zip"
 xcrun stapler staple "$APP"
 spctl -a -vv "$APP"
 
-ditto -c -k --keepParent "$APP" "$ZIP"
-echo "Готово: $ZIP"
-shasum -a 256 "$ZIP"
+# Образ: приложение и ярлык папки «Программы», чтобы перетащить одно в другое. Образ тоже
+# подписывается и нотаризуется — иначе macOS предупреждает уже при его открытии.
+mkdir "$OUT/dmg"
+cp -R "$APP" "$OUT/dmg/"
+ln -s /Applications "$OUT/dmg/Applications"
+hdiutil create -volname "Раскладушка" -srcfolder "$OUT/dmg" -ov -format UDZO "$DMG"
+rm -rf "$OUT/dmg"
+codesign --sign "Developer ID Application" --timestamp "$DMG"
+notarize "$DMG"
+xcrun stapler staple "$DMG"
+spctl -a -t open --context context:primary-signature -vv "$DMG"
+
+echo "Готово: $DMG"
+shasum -a 256 "$DMG"
 
 if [[ "${1:-}" == "--draft" ]]; then
-  gh release create "v$VERSION" "$ZIP" --draft --title "Раскладушка $VERSION" \
+  gh release create "v$VERSION" "$DMG" --draft --title "Раскладушка $VERSION" \
     --notes-file "AppStore/release-notes/$VERSION.md"
 fi

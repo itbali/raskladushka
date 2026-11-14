@@ -79,7 +79,7 @@ swift Tools/make_screenshots.swift Design/backgrounds <окно.png> Design/icon
 ## Релиз на GitHub
 
 ```bash
-Tools/release-github.sh            # build/github/Raskladushka-<версия>.zip: Developer ID, нотаризация Apple
+Tools/release-github.sh            # build/github/Raskladushka-<версия>.dmg: Developer ID, нотаризация Apple
 Tools/release-github.sh --draft    # то же и черновик релиза v<версия> с текстом из AppStore/release-notes/
 ```
 
