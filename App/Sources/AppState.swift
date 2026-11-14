@@ -13,6 +13,8 @@ final class AppState: ObservableObject {
     @Published var autoSwitchEnabled: Bool { didSet { defaults.set(autoSwitchEnabled, forKey: "autoSwitch"); session.autoSwitchEnabled = autoSwitchEnabled; refresh() } }
     @Published var hotkeyEnabled: Bool { didSet { defaults.set(hotkeyEnabled, forKey: "hotkeyEnabled"); registerHotKey() } }
     @Published var combo: KeyCombo { didSet { defaults.set(try? JSONEncoder().encode(combo), forKey: "combo"); registerHotKey() } }
+    /// Забирать сочетание у macOS (Spotlight, смена языка…): перехватчик становится активным.
+    @Published var overrideSystem: Bool { didSet { defaults.set(overrideSystem, forKey: "overrideSystem"); registerHotKey() } }
     @Published var exceptions: [String] { didSet { defaults.set(exceptions, forKey: "exceptions"); session.detector.exceptions = Set(exceptions) } }
     @Published var excludedApps: [String] { didSet { defaults.set(excludedApps, forKey: "excludedApps") } }
     @Published private(set) var launchAtLogin = false
@@ -40,12 +42,18 @@ final class AppState: ObservableObject {
     private static let undoCombo = KeyCombo(keyCode: 6, modifiers: NSEvent.ModifierFlags.command.rawValue)
     private let session: TypingSession
     private var timer: Timer?
+    /// Пока в настройках записывается сочетание, нажатия уходят сюда, а не в набор.
+    var recordingProbe: ((UInt16, CGEventFlags) -> Void)?
+    /// Модификаторы, зажатые с момента, когда не было зажато ни одного; `nil` — в эту серию
+    /// вмешалась клавиша или мышь, и сочетанием из одних модификаторов она уже не станет.
+    private var heldModifiers: NSEvent.ModifierFlags? = []
     private var askedListenAccess = false
 
     private init() {
         defaults.register(defaults: ["autoSwitch": true, "hotkeyEnabled": true])
         autoSwitchEnabled = defaults.bool(forKey: "autoSwitch")
         hotkeyEnabled = defaults.bool(forKey: "hotkeyEnabled")
+        overrideSystem = defaults.bool(forKey: "overrideSystem")
         combo = defaults.data(forKey: "combo").flatMap { try? JSONDecoder().decode(KeyCombo.self, from: $0) } ?? .default
         let savedExceptions = defaults.stringArray(forKey: "exceptions") ?? []
         exceptions = savedExceptions
@@ -56,6 +64,14 @@ final class AppState: ObservableObject {
 
     func start() {
         tap.handler = { [weak self] in self?.handle($0) }
+        tap.swallow = { [weak self] keyCode, flags in
+            guard let self, self.hotkeyEnabled else { return false }
+            // Пока записывается сочетание — забираем всё, что на него похоже, чтобы система не сработала.
+            if self.recordingProbe != nil {
+                return !KeyCombo.modifiers(flags).intersection([.control, .option, .command]).isEmpty
+            }
+            return self.combo.matches(keyCode: keyCode, flags: flags)
+        }
         hotKey.action = { [weak self] in self?.hotKeyPressed() }
         undoKey.action = { [weak self] in self?.undoPressed() }
         inputSources.onUserChangedLayout = { [weak self] in self?.session.reset(); self?.syncUndoKey() }
@@ -97,7 +113,10 @@ final class AppState: ObservableObject {
         }
         #endif
         if autoSwitchEnabled || hotkeyEnabled {
-            if !running, post || listen { running = tap.start() }
+            // Активный перехват требует «Универсального доступа»; не дали или не вышло — работаем как обычно.
+            let active = overrideSystem && hotkeyEnabled && post
+            if running, tap.isActive != active { tap.stop(); running = false }
+            if !running, post || listen { running = (active && tap.start(active: true)) || tap.start() }
         } else if running {
             tap.stop()
             running = false
@@ -107,6 +126,7 @@ final class AppState: ObservableObject {
         if listen != canListenEvents { canListenEvents = listen }
         if running != tapRunning { tapRunning = running }
         if count != layoutCount { layoutCount = count }
+        if tap.isActive != capturing { applyHotKey() }
         syncUndoKey()
     }
 
@@ -171,9 +191,20 @@ final class AppState: ObservableObject {
 
     // MARK: Горячая клавиша
 
+    /// Сочетание сейчас забирает перехватчик, а не Carbon.
+    @Published private(set) var capturing = false
+
     private func registerHotKey() {
-        hotkeyRegistered = hotKey.register(hotkeyEnabled ? combo : nil)
         refresh()
+        applyHotKey()
+    }
+
+    /// Когда сочетание забирает перехватчик, Carbon не нужен: до него нажатие всё равно не дойдёт.
+    private func applyHotKey() {
+        let byTap = tap.isActive
+        if byTap != capturing { capturing = byTap }
+        let registered = hotKey.register(hotkeyEnabled && !byTap ? combo : nil)
+        if registered != hotkeyRegistered { hotkeyRegistered = registered }
     }
 
     private func hotKeyPressed() {
@@ -273,9 +304,26 @@ final class AppState: ObservableObject {
     private func handle(_ event: KeyboardTap.Event) {
         defer { syncUndoKey() }
         switch event {
+        case .flagsChanged(let flags):
+            let now = KeyCombo.modifiers(flags)
+            if !now.isEmpty {
+                heldModifiers?.formUnion(now)
+            } else {
+                let held = heldModifiers
+                heldModifiers = []
+                if hotkeyEnabled, combo.isModifiersOnly, recordingProbe == nil, held == combo.flags {
+                    DispatchQueue.main.async { [weak self] in self?.hotKeyPressed() }
+                }
+            }
+        case .captured(let keyCode, let flags, let isRepeat):
+            heldModifiers = nil
+            if let recordingProbe { recordingProbe(keyCode, flags) } else if !isRepeat { hotKeyPressed() }
         case .mouseDown:
+            if !KeyCombo.modifiers(CGEventSource.flagsState(.combinedSessionState)).isEmpty { heldModifiers = nil }
             if !frontmostIsTerminal { session.reset() }
         case .keyDown(let keyCode, let flags):
+            if !KeyCombo.modifiers(flags).isEmpty { heldModifiers = nil }
+            if let recordingProbe { recordingProbe(keyCode, flags); return }
             if hotkeyEnabled, combo.matches(keyCode: keyCode, flags: flags) { return }
             // Наш ⌘Z: замену вернёт обработчик сочетания, сессию до него не трогаем.
             if undoKey.isRegistered, Self.undoCombo.matches(keyCode: keyCode, flags: flags) { return }

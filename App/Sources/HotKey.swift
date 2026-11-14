@@ -9,6 +9,20 @@ struct KeyCombo: Equatable, Codable {
 
     static let `default` = KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags([.control, .shift]).rawValue)
     static let relevant: NSEvent.ModifierFlags = [.control, .option, .shift, .command]
+    /// Вместо кода клавиши: сочетание из одних модификаторов (например, ⌃⇧). Срабатывает, когда
+    /// их нажали и отпустили, не тронув больше ничего. Carbon так не умеет — следит перехватчик.
+    static let modifiersOnly: UInt16 = 0xFFFF
+
+    var isModifiersOnly: Bool { keyCode == Self.modifiersOnly }
+
+    static func modifiers(_ cgFlags: CGEventFlags) -> NSEvent.ModifierFlags {
+        var pressed: NSEvent.ModifierFlags = []
+        if cgFlags.contains(.maskControl) { pressed.insert(.control) }
+        if cgFlags.contains(.maskAlternate) { pressed.insert(.option) }
+        if cgFlags.contains(.maskShift) { pressed.insert(.shift) }
+        if cgFlags.contains(.maskCommand) { pressed.insert(.command) }
+        return pressed
+    }
 
     var flags: NSEvent.ModifierFlags { NSEvent.ModifierFlags(rawValue: modifiers).intersection(Self.relevant) }
 
@@ -22,13 +36,8 @@ struct KeyCombo: Equatable, Codable {
     }
 
     func matches(keyCode: UInt16, flags cgFlags: CGEventFlags) -> Bool {
-        guard keyCode == self.keyCode else { return false }
-        var pressed: NSEvent.ModifierFlags = []
-        if cgFlags.contains(.maskControl) { pressed.insert(.control) }
-        if cgFlags.contains(.maskAlternate) { pressed.insert(.option) }
-        if cgFlags.contains(.maskShift) { pressed.insert(.shift) }
-        if cgFlags.contains(.maskCommand) { pressed.insert(.command) }
-        return pressed == flags
+        guard keyCode == self.keyCode, !isModifiersOnly else { return false }
+        return Self.modifiers(cgFlags) == flags
     }
 
     var display: String {
@@ -37,7 +46,7 @@ struct KeyCombo: Equatable, Codable {
         if flags.contains(.option) { text += "⌥" }
         if flags.contains(.shift) { text += "⇧" }
         if flags.contains(.command) { text += "⌘" }
-        return text + Self.keyName(keyCode)
+        return isModifiersOnly ? text : text + Self.keyName(keyCode)
     }
 
     static func keyName(_ keyCode: UInt16) -> String {
@@ -87,7 +96,7 @@ final class HotKey {
     func register(_ combo: KeyCombo?) -> Bool {
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
         hotKeyRef = nil
-        guard let combo else { return true }
+        guard let combo, !combo.isModifiersOnly else { return true }
         let hotKeyID = EventHotKeyID(signature: OSType(0x5241_534B), id: id)
         let status = RegisterEventHotKey(UInt32(combo.keyCode), combo.carbonModifiers, hotKeyID,
                                          GetApplicationEventTarget(), 0, &hotKeyRef)

@@ -51,9 +51,63 @@ enum SelfTest {
         }
     }
 
+    /// `Raskladushka --capturetest`: проверяет перехват системного сочетания на примере ⌃Space
+    /// (в macOS — смена языка). Сначала жмёт ⌃Space без перехвата: раскладка должна смениться.
+    /// Потом с перехватом: меняться не должна. Настройки в конце возвращает.
+    static func captureTestIfRequested() {
+        guard CommandLine.arguments.contains("--capturetest") else { return }
+        func press(_ keyCode: CGKeyCode, _ flags: CGEventFlags) {
+            for down in [true, false] {
+                let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
+                event?.flags = flags
+                event?.post(tap: .cghidEventTap)
+                usleep(30_000)
+            }
+        }
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("capturetest.txt")
+        var lines = ["доступ на отправку: \(AppState.hasPostAccess)"]
+        func note(_ line: String) { lines.append(line); try? lines.joined(separator: "\n").write(to: log, atomically: true, encoding: .utf8) }
+        func onMain(_ work: @escaping () -> Void) { DispatchQueue.main.sync(execute: work) }
+        let state = AppState.shared
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+            var saved: (Bool, Bool, KeyCombo) = (false, false, .default)
+            onMain {
+                saved = (state.hotkeyEnabled, state.overrideSystem, state.combo)
+                state.hotkeyEnabled = false
+            }
+            sleep(1)
+            let start = InputSources.currentID()
+            press(49, .maskControl)
+            sleep(1)
+            let free = InputSources.currentID()
+            note("без перехвата: ⌃Space сменил раскладку — \(free != start)")
+            if free != start { press(49, .maskControl); sleep(1) }
+            onMain {
+                state.combo = KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags.control.rawValue)
+                state.overrideSystem = true
+                state.hotkeyEnabled = true
+            }
+            sleep(1)
+            var capturing = false
+            onMain { capturing = state.capturing }
+            let before = InputSources.currentID()
+            press(49, .maskControl)
+            sleep(1)
+            note("перехват включился — \(capturing); ⌃Space сменил раскладку — \(InputSources.currentID() != before)")
+            onMain {
+                state.hotkeyEnabled = saved.0
+                state.overrideSystem = saved.1
+                state.combo = saved.2
+            }
+            sleep(1)
+            exit(0)
+        }
+    }
+
     static func runIfRequested() {
         renderIfRequested()
         typeTestIfRequested()
+        captureTestIfRequested()
         guard CommandLine.arguments.contains("--selftest") else { return }
         let sources = InputSources()
         print("sandbox:", ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] ?? "no")
