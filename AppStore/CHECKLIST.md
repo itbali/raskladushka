@@ -34,3 +34,16 @@
 заметки для ревью. При отказе: ответить в Resolution Center со ссылкой на заметки и на аналоги в магазине;
 если не поможет — распространять вне магазина с подписью Developer ID и нотаризацией (код менять не нужно,
 достаточно другого способа экспорта).
+
+## Релиз на GitHub
+
+```bash
+Tools/release-github.sh            # build/github/Raskladushka-<версия>.dmg: Developer ID, нотаризация Apple
+Tools/release-github.sh --draft    # то же и черновик релиза v<версия> с текстом из AppStore/release-notes/
+```
+
+Нужны те же настройки, что для App Store (`Tools/appstore/config.env`), и сертификат «Developer ID Application»
+в связке ключей. Выпустить его может только владелец аккаунта; если Xcode отказывает («This operation can only
+be performed by the Account Holder»), сертификат выпускается на developer.apple.com → Certificates → «+» →
+Developer ID Application по файлу запроса. Перед запуском: поднять версию в `project.yml` и написать
+`AppStore/release-notes/<версия>.md`. Черновик публикуется кнопкой «Publish release» на GitHub.
