@@ -18,11 +18,24 @@ final class KeyboardTap {
     }
 
     var handler: ((Event) -> Void)?
-    /// Активный режим: забрать ли это нажатие. Вызывается прямо в обработчике системы — должна быть быстрой.
-    var swallow: ((UInt16, CGEventFlags) -> Bool)?
+    /// Что забирать в активном режиме: одно сочетание либо (пока сочетание записывается в настройках)
+    /// всё, что на сочетание похоже. Читается из потока перехватчика, поэтому под замком.
+    struct Capture {
+        var combo: KeyCombo?
+        var anyShortcut = false
+    }
+
+    var capture: Capture {
+        get { lock.lock(); defer { lock.unlock() }; return storedCapture }
+        set { lock.lock(); storedCapture = newValue; lock.unlock() }
+    }
+
     private(set) var isActive = false
     private var port: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var runLoop: CFRunLoop?
+    private let lock = NSLock()
+    private var storedCapture = Capture()
 
     var isRunning: Bool {
         guard let port else { return false }
@@ -53,16 +66,39 @@ final class KeyboardTap {
         isActive = active
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
         runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        if active {
+            // Активный перехватчик задерживает каждое нажатие, пока не ответит, — в том числе наши
+            // собственные. Отвечать с главного потока нельзя: он как раз занят отправкой этих нажатий
+            // и ожиданием ответа приложения. Поэтому у активного режима свой поток.
+            let ready = DispatchSemaphore(value: 0)
+            let thread = Thread { [weak self] in
+                let loop = CFRunLoopGetCurrent()
+                self?.runLoop = loop
+                CFRunLoopAddSource(loop, source, .commonModes)
+                ready.signal()
+                CFRunLoopRun()
+            }
+            thread.name = "Raskladushka.KeyboardTap"
+            thread.qualityOfService = .userInteractive
+            thread.start()
+            ready.wait()
+        } else {
+            runLoop = CFRunLoopGetMain()
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        }
         CGEvent.tapEnable(tap: port, enable: true)
         return true
     }
 
     func stop() {
         if let port { CGEvent.tapEnable(tap: port, enable: false); CFMachPortInvalidate(port) }
-        if let runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes) }
+        if let runLoop, let runLoopSource {
+            CFRunLoopRemoveSource(runLoop, runLoopSource, .commonModes)
+            if isActive { CFRunLoopStop(runLoop) }
+        }
         port = nil
         runLoopSource = nil
+        runLoop = nil
         isActive = false
     }
 
@@ -77,6 +113,14 @@ final class KeyboardTap {
         }
     }
 
+    private func wanted(_ keyCode: UInt16, _ flags: CGEventFlags) -> Bool {
+        let capture = self.capture
+        if capture.anyShortcut {
+            return !KeyCombo.modifiers(flags).intersection([.control, .option, .command]).isEmpty
+        }
+        return capture.combo?.matches(keyCode: keyCode, flags: flags) ?? false
+    }
+
     /// Возвращает `true`, если нажатие нужно забрать и дальше не пускать.
     private func received(type: CGEventType, event: CGEvent) -> Bool {
         switch type {
@@ -85,7 +129,7 @@ final class KeyboardTap {
         case .keyDown:
             guard event.getIntegerValueField(.eventSourceUserData) != syntheticEventMarker else { return false }
             let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-            if isActive, swallow?(keyCode, event.flags) == true {
+            if isActive, wanted(keyCode, event.flags) {
                 let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
                 emit(.captured(keyCode: keyCode, flags: event.flags, isRepeat: isRepeat))
                 return true

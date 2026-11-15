@@ -9,11 +9,6 @@ final class TextInjector {
         return source
     }()
 
-    /// Отправлять нажатия в обход перехватчиков сессии. Нужно, когда наш собственный перехватчик активный:
-    /// иначе каждое наше нажатие ждёт в нём, пока освободится главный поток, — а тот как раз занят
-    /// отправкой и ожиданием ответа (⌘C не доходил до приложения, и выделение не переводилось).
-    var bypassSessionTaps = false
-
     private func post(keyCode: CGKeyCode, flags: CGEventFlags = [], text: String? = nil) {
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down) else { continue }
@@ -23,12 +18,18 @@ final class TextInjector {
                 event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
             }
             event.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
-            event.post(tap: bypassSessionTaps ? .cgAnnotatedSessionEventTap : .cgSessionEventTap)
+            event.post(tap: .cgSessionEventTap)
         }
         usleep(3_000)
     }
 
-    func replace(deleteCount: Int, with text: String) {
+    /// `dismissSuggestion` — для строки Spotlight: там за набранным стоит подсказка-дополнение, и первое
+    /// стирание убирает её, а не букву. ⌦ убирает подсказку, а без неё в конце строки ничего не делает.
+    func replace(deleteCount: Int, with text: String, dismissSuggestion: Bool = false) {
+        if dismissSuggestion, deleteCount > 0 {
+            post(keyCode: 117)
+            usleep(30_000)
+        }
         for _ in 0..<deleteCount { post(keyCode: 51) }
         if deleteCount > 0 { usleep(8_000) }
         type(text)

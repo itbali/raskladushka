@@ -43,7 +43,7 @@ final class AppState: ObservableObject {
     private let session: TypingSession
     private var timer: Timer?
     /// Пока в настройках записывается сочетание, нажатия уходят сюда, а не в набор.
-    var recordingProbe: ((UInt16, CGEventFlags) -> Void)?
+    var recordingProbe: ((UInt16, CGEventFlags) -> Void)? { didSet { updateCapture() } }
     /// Модификаторы, зажатые с момента, когда не было зажато ни одного; `nil` — в эту серию
     /// вмешалась клавиша или мышь, и сочетанием из одних модификаторов она уже не станет.
     private var heldModifiers: NSEvent.ModifierFlags? = []
@@ -64,14 +64,7 @@ final class AppState: ObservableObject {
 
     func start() {
         tap.handler = { [weak self] in self?.handle($0) }
-        tap.swallow = { [weak self] keyCode, flags in
-            guard let self, self.hotkeyEnabled else { return false }
-            // Пока записывается сочетание — забираем всё, что на него похоже, чтобы система не сработала.
-            if self.recordingProbe != nil {
-                return !KeyCombo.modifiers(flags).intersection([.control, .option, .command]).isEmpty
-            }
-            return self.combo.matches(keyCode: keyCode, flags: flags)
-        }
+        updateCapture()
         hotKey.action = { [weak self] in self?.hotKeyPressed() }
         undoKey.action = { [weak self] in self?.undoPressed() }
         inputSources.onUserChangedLayout = { [weak self] in self?.session.reset(); self?.syncUndoKey() }
@@ -126,7 +119,7 @@ final class AppState: ObservableObject {
         if listen != canListenEvents { canListenEvents = listen }
         if running != tapRunning { tapRunning = running }
         if count != layoutCount { layoutCount = count }
-        injector.bypassSessionTaps = tap.isActive
+        updateCapture()
         if tap.isActive != capturing { applyHotKey() }
         syncUndoKey()
     }
@@ -192,6 +185,13 @@ final class AppState: ObservableObject {
 
     // MARK: Горячая клавиша
 
+    /// Что активный перехватчик забирает себе: своё сочетание, а пока сочетание записывается
+    /// в настройках — всё, что на него похоже, чтобы система не сработала раньше нас.
+    private func updateCapture() {
+        tap.capture = KeyboardTap.Capture(combo: hotkeyEnabled ? combo : nil,
+                                          anyShortcut: hotkeyEnabled && recordingProbe != nil)
+    }
+
     /// Сочетание сейчас забирает перехватчик, а не Carbon.
     @Published private(set) var capturing = false
 
@@ -208,7 +208,22 @@ final class AppState: ObservableObject {
         if registered != hotkeyRegistered { hotkeyRegistered = registered }
     }
 
+    /// Выполняет действие, когда отпущены ⌃⌥⇧⌘ (но не дольше полутора секунд ожидания).
+    /// Пока клавиши сочетания зажаты, наши стирания и буквы некоторые поля читают как сочетания:
+    /// в строке Spotlight ⌃ вместе с нашей «буквой» уводил курсор в начало, а слово не менялось.
+    private func whenModifiersReleased(deadline: Date = Date().addingTimeInterval(1.5), _ action: @escaping () -> Void) {
+        let held = KeyCombo.modifiers(CGEventSource.flagsState(.combinedSessionState))
+        if held.isEmpty || Date() > deadline { action(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
+            self?.whenModifiersReleased(deadline: deadline, action)
+        }
+    }
+
     private func hotKeyPressed() {
+        whenModifiersReleased { [weak self] in self?.convert() }
+    }
+
+    private func convert() {
         guard hotkeyEnabled, let context = inputSources.context() else { return }
         guard Self.hasPostAccess else { requestPostAccess(); return }
         if let replacement = session.manualToggle(context: context) {
@@ -228,9 +243,12 @@ final class AppState: ObservableObject {
     }
 
     private func undoPressed() {
-        defer { syncUndoKey() }
-        guard Self.hasPostAccess, let replacement = session.undoLast() else { return }
-        apply(replacement)
+        whenModifiersReleased { [weak self] in
+            guard let self else { return }
+            defer { self.syncUndoKey() }
+            guard Self.hasPostAccess, let replacement = self.session.undoLast() else { return }
+            self.apply(replacement)
+        }
     }
 
     /// Терминалы: щелчок мышью не двигает курсор, а выделенный текст нельзя заменить вставкой.
@@ -349,10 +367,18 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Открыта ли строка Spotlight. Это панель поверх активного приложения, само приложение при этом
+    /// не меняется — узнать о ней можно только по её окну на экране.
+    private static var spotlightIsOpen: Bool {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        return list.contains { $0[kCGWindowOwnerName as String] as? String == "Spotlight" }
+    }
+
     private static let printable = Set(LayoutTable.printableKeyCodes)
 
     private func apply(_ replacement: Replacement) {
-        injector.replace(deleteCount: replacement.deleteCount, with: replacement.insert)
+        injector.replace(deleteCount: replacement.deleteCount, with: replacement.insert,
+                         dismissSuggestion: Self.spotlightIsOpen)
         inputSources.select(replacement.switchTo)
         if let word = replacement.learnedException, !exceptions.contains(word) {
             exceptions.append(word)

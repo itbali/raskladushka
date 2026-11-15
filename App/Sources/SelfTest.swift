@@ -104,10 +104,213 @@ enum SelfTest {
         }
     }
 
+    /// `Raskladushka --activetest`: проверяет перевод слова перехваченным ⌃Space так, как его нажимает
+    /// человек, — с зажатым Control. Печатает в собственное окно, чужие окна не трогает.
+    /// Итог — в tmp/activetest.txt контейнера. Настройки в конце возвращает.
+    static func activeTestIfRequested() {
+        guard CommandLine.arguments.contains("--activetest") else { return }
+        let hold = CommandLine.arguments.contains("--hold")
+        func key(_ keyCode: CGKeyCode, _ down: Bool, _ flags: CGEventFlags = []) {
+            let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
+            event?.flags = flags
+            event?.post(tap: .cghidEventTap)
+            usleep(30_000)
+        }
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("activetest.txt")
+        var lines: [String] = []
+        func note(_ line: String) { lines.append(line); try? lines.joined(separator: "\n").write(to: log, atomically: true, encoding: .utf8) }
+        func onMain<T>(_ work: () -> T) -> T { DispatchQueue.main.sync(execute: work) }
+        let state = AppState.shared
+        var window: NSWindow?
+        var view: NSTextView?
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            let w = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 360, height: 80),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+            w.title = "Проверка Раскладушки"
+            let v = NSTextView(frame: w.contentView!.bounds)
+            v.isAutomaticSpellingCorrectionEnabled = false
+            v.isAutomaticTextReplacementEnabled = false
+            w.contentView?.addSubview(v)
+            NSApp.activate(ignoringOtherApps: true)
+            w.makeKeyAndOrderFront(nil)
+            w.makeFirstResponder(v)
+            window = w
+            view = v
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+            let saved = onMain { (state.hotkeyEnabled, state.overrideSystem, state.combo) }
+            let override = !CommandLine.arguments.contains("--carbon")
+            onMain {
+                state.combo = KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags.control.rawValue)
+                state.overrideSystem = override
+                state.hotkeyEnabled = true
+            }
+            sleep(1)
+            let russian = onMain { InputSources.currentID() }.contains("Russian")
+            note("перехват: \(onMain { state.capturing }), окно впереди: \(onMain { window?.isKeyWindow ?? false }), раскладка: \(onMain { InputSources.currentID() })")
+            // Наше окно не впереди — значит, человек работает в другом. Туда не печатаем.
+            guard onMain({ window?.isKeyWindow ?? false }) else {
+                note("отменено: окно проверки не на переднем плане")
+                onMain { state.hotkeyEnabled = saved.0; state.overrideSystem = saved.1; state.combo = saved.2 }
+                exit(0)
+            }
+            for code: CGKeyCode in russian ? [4, 14, 37, 37, 31] : [5, 4, 11, 2, 17, 45] { key(code, true); key(code, false) }
+            usleep(300_000)
+            note("набрано: [\(onMain { view?.string ?? "?" })]")
+            key(59, true, .maskControl)
+            key(49, true, .maskControl)
+            if hold {
+                sleep(2)
+                note("Control ещё зажат: [\(onMain { view?.string ?? "?" })]")
+            }
+            key(49, false, .maskControl)
+            key(59, false)
+            sleep(2)
+            note("после отпускания: [\(onMain { view?.string ?? "?" })] раскладка: \(onMain { InputSources.currentID() })")
+            onMain {
+                state.hotkeyEnabled = saved.0
+                state.overrideSystem = saved.1
+                state.combo = saved.2
+            }
+            sleep(1)
+            exit(0)
+        }
+    }
+
+    /// `Raskladushka --axprobe`: 20 секунд раз в секунду пишет, что видно через Accessibility о поле
+    /// с курсором: чьё оно, какой роли и есть ли выделение. Сам текст не читает, ничего не нажимает.
+    /// Итог — в tmp/axprobe.txt контейнера.
+    static func axProbeIfRequested() {
+        guard CommandLine.arguments.contains("--axprobe") else { return }
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("axprobe.txt")
+        var lines = ["trusted: \(AXIsProcessTrusted())"]
+        var count = 0
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
+            count += 1
+            let system = AXUIElementCreateSystemWide()
+            var focused: CFTypeRef?
+            let e1 = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
+            var line = "\(count): focused=\(e1.rawValue)"
+            if e1 == .success, let focused {
+                let element = focused as! AXUIElement
+                var pid: pid_t = 0
+                AXUIElementGetPid(element, &pid)
+                var role: CFTypeRef?
+                AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+                var value: CFTypeRef?
+                let e2 = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value)
+                var range = CFRange()
+                if e2 == .success, let value { AXValueGetValue(value as! AXValue, .cfRange, &range) }
+                var length: CFTypeRef?
+                AXUIElementCopyAttributeValue(element, kAXNumberOfCharactersAttribute as CFString, &length)
+                line += " app=\(NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?") role=\(role as? String ?? "?")"
+                    + " range=\(e2.rawValue):\(range.location)+\(range.length) chars=\(length as? Int ?? -1)"
+            }
+            lines.append(line)
+            try? lines.joined(separator: "\n").write(to: log, atomically: true, encoding: .utf8)
+            if count >= 20 { timer.invalidate() }
+        }
+    }
+
+    /// `Raskladushka --spotprobe`: открывает Spotlight (⌘Space), смотрит, какие окна появились на экране,
+    /// и закрывает его (Esc). Итог — в tmp/spotprobe.txt контейнера.
+    static func spotProbeIfRequested() {
+        guard CommandLine.arguments.contains("--spotprobe") else { return }
+        func windows() -> Set<String> {
+            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+            return Set(list.map { w in
+                let b = w[kCGWindowBounds as String] as? [String: Any] ?? [:]
+                return "\(w[kCGWindowOwnerName as String] ?? "?") layer=\(w[kCGWindowLayer as String] ?? "?") "
+                    + "\(b["Width"] ?? "?")x\(b["Height"] ?? "?") alpha=\(w[kCGWindowAlpha as String] ?? "?")"
+            })
+        }
+        func key(_ keyCode: CGKeyCode, _ flags: CGEventFlags = []) {
+            for down in [true, false] {
+                let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
+                event?.flags = flags
+                event?.post(tap: .cghidEventTap)
+                usleep(30_000)
+            }
+        }
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("spotprobe.txt")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+            let before = windows()
+            key(49, .maskCommand)
+            sleep(1)
+            let opened = windows()
+            key(53)
+            sleep(1)
+            let after = windows()
+            let text = (["появились:"] + opened.subtracting(before).sorted() + ["после закрытия остались:"]
+                        + after.subtracting(before).sorted() + ["Spotlight до открытия:"]
+                        + before.filter { $0.contains("Spotlight") }.sorted()).joined(separator: "\n")
+            try? text.write(to: log, atomically: true, encoding: .utf8)
+            exit(0)
+        }
+    }
+
+    /// `Raskladushka --spottest`: открывает Spotlight, набирает в нём слово не в той раскладке, жмёт
+    /// сочетание перевода и читает, что получилось в строке (⌘A ⌘C, буфер обмена потом возвращает).
+    /// Если Spotlight не открылся — ничего не печатает. Итог — в tmp/spottest.txt контейнера.
+    static func spotTestIfRequested() {
+        guard CommandLine.arguments.contains("--spottest") else { return }
+        func spotlightOpen() -> Bool {
+            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+            return list.contains { $0[kCGWindowOwnerName as String] as? String == "Spotlight" }
+        }
+        func key(_ keyCode: CGKeyCode, _ flags: CGEventFlags = []) {
+            for down in [true, false] {
+                let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
+                event?.flags = flags
+                event?.post(tap: .cghidEventTap)
+                usleep(30_000)
+            }
+        }
+        func onMain<T>(_ work: () -> T) -> T { DispatchQueue.main.sync(execute: work) }
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("spottest.txt")
+        var lines: [String] = []
+        func note(_ line: String) { lines.append(line); try? lines.joined(separator: "\n").write(to: log, atomically: true, encoding: .utf8) }
+        let state = AppState.shared
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+            let combo = onMain { state.combo }
+            var flags: CGEventFlags = []
+            if combo.flags.contains(.control) { flags.insert(.maskControl) }
+            if combo.flags.contains(.option) { flags.insert(.maskAlternate) }
+            if combo.flags.contains(.shift) { flags.insert(.maskShift) }
+            if combo.flags.contains(.command) { flags.insert(.maskCommand) }
+            let russian = onMain { InputSources.currentID() }.contains("Russian")
+            note("сочетание \(combo.display), перехват \(onMain { state.capturing }), раскладка русская: \(russian)")
+            key(49, .maskCommand)
+            sleep(1)
+            guard spotlightOpen(), !combo.isModifiersOnly else { note("отменено: Spotlight не открылся"); exit(0) }
+            for code: CGKeyCode in russian ? [4, 14, 37, 37, 31] : [5, 4, 11, 2, 17, 45] { key(code) }
+            usleep(700_000)
+            key(CGKeyCode(combo.keyCode), flags)
+            sleep(2)
+            let pasteboard = NSPasteboard.general
+            let snapshot = onMain { PasteboardSnapshot(pasteboard) }
+            let before = pasteboard.changeCount
+            key(0, .maskCommand)
+            key(8, .maskCommand)
+            usleep(500_000)
+            let text = pasteboard.changeCount != before ? (pasteboard.string(forType: .string) ?? "<не текст>") : "<ничего не скопировалось>"
+            note("набрано \(russian ? "руддщ" : "ghbdtn"), в строке после перевода: [\(text)]")
+            onMain { snapshot.restore(to: pasteboard) }
+            if spotlightOpen() { key(53) }
+            usleep(300_000)
+            if spotlightOpen() { key(53) }
+            exit(0)
+        }
+    }
+
     static func runIfRequested() {
         renderIfRequested()
+        spotTestIfRequested()
+        spotProbeIfRequested()
+        axProbeIfRequested()
         typeTestIfRequested()
         captureTestIfRequested()
+        activeTestIfRequested()
         guard CommandLine.arguments.contains("--selftest") else { return }
         let sources = InputSources()
         print("sandbox:", ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] ?? "no")
