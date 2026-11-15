@@ -8,12 +8,15 @@ options:
 packages:
   SwitcherCore:
     path: Packages/SwitcherCore
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.6.0"
 settings:
   base:
     SWIFT_VERSION: "5.0"
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
-    MARKETING_VERSION: "1.1.1"
-    CURRENT_PROJECT_VERSION: "3"
+    MARKETING_VERSION: "1.2.0"
+    CURRENT_PROJECT_VERSION: "4"
 targets:
   Raskladushka:
     type: application
@@ -44,6 +47,53 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alexey.duzhev.raskladushka
         PRODUCT_NAME: Raskladushka
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: NO
+        DEAD_CODE_STRIPPING: YES
+  # Сборка для GitHub: то же приложение плюс автообновление (Sparkle). В App Store не идёт.
+  RaskladushkaDirect:
+    type: application
+    platform: macOS
+    sources:
+      - App/Sources
+      - App/Resources
+    dependencies:
+      - package: SwitcherCore
+      - package: Sparkle
+    info:
+      path: App/Info-Direct.plist
+      properties:
+        CFBundleDisplayName: Раскладушка
+        CFBundleName: Раскладушка
+        CFBundleDevelopmentRegion: ru
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.utilities
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        ITSAppUsesNonExemptEncryption: false
+        NSHumanReadableCopyright: © 2026 Aleksei Diuzhev
+        # Обновления: список версий лежит в репозитории, подпись обновлений проверяется этим ключом.
+        SUFeedURL: https://raw.githubusercontent.com/itbali/raskladushka/main/appcast.xml
+        SUPublicEDKey: sLoZwqEGbCYGp0r8vI01sYsGO4wOyGRwdP/9BhxjmvE=
+        SUEnableInstallerLauncherService: true
+        # Само приложение в сеть не выходит: обновление скачивает отдельная служба Sparkle.
+        SUEnableDownloaderService: true
+        SUEnableAutomaticChecks: true
+    entitlements:
+      path: App/RaskladushkaDirect.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.temporary-exception.mach-lookup.global-name:
+          - $(PRODUCT_BUNDLE_IDENTIFIER)-spks
+          - $(PRODUCT_BUNDLE_IDENTIFIER)-spki
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.alexey.duzhev.raskladushka
+        PRODUCT_NAME: Raskladushka
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DIRECT
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

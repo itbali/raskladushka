@@ -27,109 +27,35 @@ enum SelfTest {
         }
     }
 
-    /// `Raskladushka --typetest`: через 4 секунды сам печатает «руддщ » настоящими (непомеченными)
-    /// нажатиями в окно на переднем плане, затем дважды жмёт ⌘Z. Первое ⌘Z должно вернуть слово,
-    /// второе — уйти в приложение. Слово из исключений в конце убирает.
-    static func typeTestIfRequested() {
-        guard CommandLine.arguments.contains("--typetest") else { return }
-        func press(_ keyCode: CGKeyCode, _ flags: CGEventFlags = []) {
-            for down in [true, false] {
-                let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
-                event?.flags = flags
-                event?.post(tap: .cgSessionEventTap)
-                usleep(30_000)
-            }
-        }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 4) {
-            for key: CGKeyCode in [4, 14, 37, 37, 31, 49] { press(key) }
-            sleep(2)
-            press(6, .maskCommand)
-            sleep(2)
-            press(6, .maskCommand)
-            sleep(2)
-            DispatchQueue.main.async { AppState.shared.exceptions.removeAll { $0 == "руддщ" } }
-        }
-    }
+    // MARK: - Проверка в собственном окне
 
-    /// `Raskladushka --capturetest`: проверяет перехват системного сочетания на примере ⌃Space
-    /// (в macOS — смена языка). Сначала жмёт ⌃Space без перехвата: раскладка должна смениться.
-    /// Потом с перехватом: меняться не должна. Настройки в конце возвращает.
-    static func captureTestIfRequested() {
-        guard CommandLine.arguments.contains("--capturetest") else { return }
-        func press(_ keyCode: CGKeyCode, _ flags: CGEventFlags) {
-            for down in [true, false] {
-                let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
-                event?.flags = flags
-                event?.post(tap: .cghidEventTap)
-                usleep(30_000)
-            }
-        }
-        let log = FileManager.default.temporaryDirectory.appendingPathComponent("capturetest.txt")
-        var lines = ["доступ на отправку: \(AppState.hasPostAccess)"]
-        func note(_ line: String) { lines.append(line); try? lines.joined(separator: "\n").write(to: log, atomically: true, encoding: .utf8) }
-        func onMain(_ work: @escaping () -> Void) { DispatchQueue.main.sync(execute: work) }
-        let state = AppState.shared
-        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-            var saved: (Bool, Bool, KeyCombo) = (false, false, .default)
-            onMain {
-                saved = (state.hotkeyEnabled, state.overrideSystem, state.combo)
-                state.hotkeyEnabled = false
-            }
-            sleep(1)
-            let start = InputSources.currentID()
-            press(49, .maskControl)
-            sleep(1)
-            let free = InputSources.currentID()
-            note("без перехвата: ⌃Space сменил раскладку — \(free != start)")
-            if free != start { press(49, .maskControl); sleep(1) }
-            onMain {
-                state.combo = KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags.control.rawValue)
-                state.overrideSystem = true
-                state.hotkeyEnabled = true
-            }
-            sleep(1)
-            var capturing = false
-            onMain { capturing = state.capturing }
-            let before = InputSources.currentID()
-            press(49, .maskControl)
-            sleep(1)
-            note("перехват включился — \(capturing); ⌃Space сменил раскладку — \(InputSources.currentID() != before)")
-            onMain {
-                state.hotkeyEnabled = saved.0
-                state.overrideSystem = saved.1
-                state.combo = saved.2
-            }
-            sleep(1)
-            exit(0)
-        }
-    }
-
-    /// `Raskladushka --activetest`: проверяет перевод слова перехваченным ⌃Space так, как его нажимает
-    /// человек, — с зажатым Control. Печатает в собственное окно, чужие окна не трогает.
-    /// Итог — в tmp/activetest.txt контейнера. Настройки в конце возвращает.
-    static func activeTestIfRequested() {
-        guard CommandLine.arguments.contains("--activetest") else { return }
-        let hold = CommandLine.arguments.contains("--hold")
-        func key(_ keyCode: CGKeyCode, _ down: Bool, _ flags: CGEventFlags = []) {
-            let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
-            event?.flags = flags
-            event?.post(tap: .cghidEventTap)
-            usleep(30_000)
-        }
-        let log = FileManager.default.temporaryDirectory.appendingPathComponent("activetest.txt")
+    /// `Raskladushka --uitest`: проверяет приложение целиком так, как им пользуется человек, — настоящими
+    /// нажатиями, но в собственном окне. Чужие окна не трогает: если окно проверки не впереди, всё
+    /// останавливается. Настройки берёт отдельные, настоящие не меняет. Итог — в tmp/uitest.txt контейнера.
+    /// С `--spotlight` дополнительно проверяет перевод в строке Spotlight (открывает её на несколько секунд).
+    static func uiTestIfRequested() {
+        guard CommandLine.arguments.contains("--uitest") else { return }
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("uitest.txt")
+        try? FileManager.default.removeItem(at: log)
         var lines: [String] = []
-        func note(_ line: String) { lines.append(line); try? lines.joined(separator: "\n").write(to: log, atomically: true, encoding: .utf8) }
+        func note(_ line: String) {
+            lines.append(line)
+            try? lines.joined(separator: "\n").write(to: log, atomically: true, encoding: .utf8)
+        }
         func onMain<T>(_ work: () -> T) -> T { DispatchQueue.main.sync(execute: work) }
         let state = AppState.shared
         var window: NSWindow?
         var view: NSTextView?
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            let w = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 360, height: 80),
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            let w = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 420, height: 90),
                              styleMask: [.titled], backing: .buffered, defer: false)
-            w.title = "Проверка Раскладушки"
+            w.title = "Проверка Раскладушки — не трогайте клавиатуру"
             let v = NSTextView(frame: w.contentView!.bounds)
+            v.font = .monospacedSystemFont(ofSize: 16, weight: .regular)
             v.isAutomaticSpellingCorrectionEnabled = false
             v.isAutomaticTextReplacementEnabled = false
+            v.isAutomaticQuoteSubstitutionEnabled = false
+            v.isAutomaticDashSubstitutionEnabled = false
             w.contentView?.addSubview(v)
             NSApp.activate(ignoringOtherApps: true)
             w.makeKeyAndOrderFront(nil)
@@ -137,180 +63,249 @@ enum SelfTest {
             window = w
             view = v
         }
+
         DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-            let saved = onMain { (state.hotkeyEnabled, state.overrideSystem, state.combo) }
-            let override = !CommandLine.arguments.contains("--carbon")
-            onMain {
-                state.combo = KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags.control.rawValue)
-                state.overrideSystem = override
-                state.hotkeyEnabled = true
-            }
-            sleep(1)
-            let russian = onMain { InputSources.currentID() }.contains("Russian")
-            note("перехват: \(onMain { state.capturing }), окно впереди: \(onMain { window?.isKeyWindow ?? false }), раскладка: \(onMain { InputSources.currentID() })")
-            // Наше окно не впереди — значит, человек работает в другом. Туда не печатаем.
-            guard onMain({ window?.isKeyWindow ?? false }) else {
-                note("отменено: окно проверки не на переднем плане")
-                onMain { state.hotkeyEnabled = saved.0; state.overrideSystem = saved.1; state.combo = saved.2 }
+            let startLayout = onMain { InputSources.currentID() }
+            let ids = onMain { state.debugLayoutIDs }
+            func finish(_ line: String) -> Never {
+                note(line)
+                onMain { state.debugSwitchLayout(to: startLayout) }
+                usleep(300_000)
                 exit(0)
             }
-            for code: CGKeyCode in russian ? [4, 14, 37, 37, 31] : [5, 4, 11, 2, 17, 45] { key(code, true); key(code, false) }
-            usleep(300_000)
-            note("набрано: [\(onMain { view?.string ?? "?" })]")
-            key(59, true, .maskControl)
-            key(49, true, .maskControl)
-            if hold {
-                sleep(2)
-                note("Control ещё зажат: [\(onMain { view?.string ?? "?" })]")
+            guard let en = ids.first(where: { $0.contains("US") || $0.contains("ABC") || $0.contains("British") }),
+                  let ru = ids.first(where: { $0.contains("Russian") }) else {
+                finish("ОТМЕНЕНО: нужны английская и русская раскладки, есть \(ids)")
             }
-            key(49, false, .maskControl)
-            key(59, false)
-            sleep(2)
-            note("после отпускания: [\(onMain { view?.string ?? "?" })] раскладка: \(onMain { InputSources.currentID() })")
-            onMain {
-                state.hotkeyEnabled = saved.0
-                state.overrideSystem = saved.1
-                state.combo = saved.2
+            func ours() -> Bool { onMain { window?.isKeyWindow ?? false } }
+            /// Любое нажатие — только пока наше окно впереди.
+            func key(_ code: CGKeyCode, _ flags: CGEventFlags = [], down: Bool? = nil) {
+                guard ours() else { finish("ОТМЕНЕНО: окно проверки ушло с переднего плана — запустите ещё раз и не трогайте клавиатуру") }
+                for isDown in down.map({ [$0] }) ?? [true, false] {
+                    let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: isDown)
+                    event?.flags = flags
+                    event?.post(tap: .cghidEventTap)
+                    usleep(25_000)
+                }
             }
-            sleep(1)
-            exit(0)
-        }
-    }
+            func keys(_ codes: [CGKeyCode]) { codes.forEach { key($0) } }
+            func pause(_ seconds: Double = 0.6) { usleep(useconds_t(seconds * 1_000_000)) }
+            func text() -> String { onMain { view?.string ?? "?" } }
+            func layout(_ id: String) {
+                if onMain({ InputSources.currentID() }) != id { onMain { state.debugSwitchLayout(to: id) }; pause(0.5) }
+            }
+            /// Чистое поле, настройки по умолчанию, нужная раскладка.
+            func fresh(_ id: String, _ change: (inout Settings) -> Void = { _ in }) {
+                onMain {
+                    var settings = Settings()
+                    settings.soundEnabled = false
+                    change(&settings)
+                    state.settings = settings
+                    state.resume()
+                    view?.string = ""
+                    state.debugReset()
+                }
+                layout(id)
+                onMain { state.debugReset() }
+                pause(0.3)
+            }
+            /// ⌘Z и ⇧⌘Z как их жмёт человек: сначала модификаторы, потом клавиша, потом всё отпустить.
+            func undoKey(shift: Bool = false) {
+                var flags: CGEventFlags = .maskCommand
+                key(55, flags, down: true)
+                if shift { flags.insert(.maskShift); key(56, flags, down: true) }
+                key(6, flags)
+                if shift { key(56, .maskCommand, down: false) }
+                key(55, [], down: false)
+            }
+            var failed = 0
+            func check(_ name: String, _ got: String, _ want: String) {
+                if got == want { note("ок      \(name)") } else { failed += 1; note("ОШИБКА  \(name): получилось [\(got)], ожидалось [\(want)]") }
+            }
+            func check(_ name: String, _ condition: Bool, _ detail: @autoclosure () -> String = "") {
+                if condition { note("ок      \(name)") } else { failed += 1; note("ОШИБКА  \(name) \(detail())") }
+            }
+            // Клавиши: руддщ = h e l l o; ghbdtn = g h b d t n.
+            let hello: [CGKeyCode] = [4, 14, 37, 37, 31]
+            let privet: [CGKeyCode] = [5, 4, 11, 2, 17, 45]
+            let space: CGKeyCode = 49, backspace: CGKeyCode = 51, z: CGKeyCode = 6
+            let own = Bundle.main.bundleIdentifier ?? ""
 
-    /// `Raskladushka --axprobe`: 20 секунд раз в секунду пишет, что видно через Accessibility о поле
-    /// с курсором: чьё оно, какой роли и есть ли выделение. Сам текст не читает, ничего не нажимает.
-    /// Итог — в tmp/axprobe.txt контейнера.
-    static func axProbeIfRequested() {
-        guard CommandLine.arguments.contains("--axprobe") else { return }
-        let log = FileManager.default.temporaryDirectory.appendingPathComponent("axprobe.txt")
-        var lines = ["trusted: \(AXIsProcessTrusted())"]
-        var count = 0
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
-            count += 1
-            let system = AXUIElementCreateSystemWide()
-            var focused: CFTypeRef?
-            let e1 = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
-            var line = "\(count): focused=\(e1.rawValue)"
-            if e1 == .success, let focused {
-                let element = focused as! AXUIElement
-                var pid: pid_t = 0
-                AXUIElementGetPid(element, &pid)
-                var role: CFTypeRef?
-                AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
-                var value: CFTypeRef?
-                let e2 = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value)
-                var range = CFRange()
-                if e2 == .success, let value { AXValueGetValue(value as! AXValue, .cfRange, &range) }
-                var length: CFTypeRef?
-                AXUIElementCopyAttributeValue(element, kAXNumberOfCharactersAttribute as CFString, &length)
-                line += " app=\(NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?") role=\(role as? String ?? "?")"
-                    + " range=\(e2.rawValue):\(range.location)+\(range.length) chars=\(length as? Int ?? -1)"
-            }
-            lines.append(line)
-            try? lines.joined(separator: "\n").write(to: log, atomically: true, encoding: .utf8)
-            if count >= 20 { timer.invalidate() }
-        }
-    }
+            // 1. Автозамена, отмена, повтор.
+            fresh(ru)
+            keys(hello + [space]); pause()
+            check("автозамена по пробелу", text(), "hello ")
+            check("после автозамены раскладка английская", onMain { InputSources.currentID() }, en)
+            check("подсказка показана", onMain { Hud.shared.isVisible })
+            check("журнал и счётчик", onMain { state.journal.count == 1 && state.stats.total == 1 }, onMain { "\(state.journal.count) \(state.stats.total)" })
+            undoKey(); pause()
+            check("⌘Z возвращает слово", text(), "руддщ ")
+            check("⌘Z возвращает раскладку", onMain { InputSources.currentID() }, ru)
+            check("отменённое слово — в исключениях", onMain { state.settings.exceptions }.joined(), "руддщ")
+            undoKey(shift: true); pause()
+            check("⇧⌘Z повторяет замену", text(), "hello ")
+            check("повтор снимает исключение", onMain { state.settings.exceptions }.joined(), "")
+            undoKey(); pause()
+            check("после повтора ⌘Z снова возвращает", text(), "руддщ ")
+            undoKey(); pause()
+            check("второй ⌘Z уходит в приложение, а не к нам", onMain { state.debugState }.contains("undoKey=false"), onMain { state.debugState })
 
-    /// `Raskladushka --spotprobe`: открывает Spotlight (⌘Space), смотрит, какие окна появились на экране,
-    /// и закрывает его (Esc). Итог — в tmp/spotprobe.txt контейнера.
-    static func spotProbeIfRequested() {
-        guard CommandLine.arguments.contains("--spotprobe") else { return }
-        func windows() -> Set<String> {
-            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-            return Set(list.map { w in
-                let b = w[kCGWindowBounds as String] as? [String: Any] ?? [:]
-                return "\(w[kCGWindowOwnerName as String] ?? "?") layer=\(w[kCGWindowLayer as String] ?? "?") "
-                    + "\(b["Width"] ?? "?")x\(b["Height"] ?? "?") alpha=\(w[kCGWindowAlpha as String] ?? "?")"
-            })
-        }
-        func key(_ keyCode: CGKeyCode, _ flags: CGEventFlags = []) {
-            for down in [true, false] {
-                let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
-                event?.flags = flags
-                event?.post(tap: .cghidEventTap)
-                usleep(30_000)
-            }
-        }
-        let log = FileManager.default.temporaryDirectory.appendingPathComponent("spotprobe.txt")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-            let before = windows()
-            key(49, .maskCommand)
-            sleep(1)
-            let opened = windows()
-            key(53)
-            sleep(1)
-            let after = windows()
-            let text = (["появились:"] + opened.subtracting(before).sorted() + ["после закрытия остались:"]
-                        + after.subtracting(before).sorted() + ["Spotlight до открытия:"]
-                        + before.filter { $0.contains("Spotlight") }.sorted()).joined(separator: "\n")
-            try? text.write(to: log, atomically: true, encoding: .utf8)
-            exit(0)
-        }
-    }
+            // 2. Отмена Backspace.
+            fresh(ru)
+            keys(hello + [space]); pause()
+            key(backspace); pause()
+            check("Backspace после автозамены возвращает слово", text(), "руддщ")
+            key(space); pause()
+            check("возвращённое слово больше не исправляется", text(), "руддщ ")
+            fresh(ru) { $0.undoByBackspace = false }
+            keys(hello + [space]); pause()
+            key(backspace); pause()
+            check("с выключенной настройкой Backspace просто стирает", text(), "hello")
 
-    /// `Raskladushka --spottest`: открывает Spotlight, набирает в нём слово не в той раскладке, жмёт
-    /// сочетание перевода и читает, что получилось в строке (⌘A ⌘C, буфер обмена потом возвращает).
-    /// Если Spotlight не открылся — ничего не печатает. Итог — в tmp/spottest.txt контейнера.
-    static func spotTestIfRequested() {
-        guard CommandLine.arguments.contains("--spottest") else { return }
-        func spotlightOpen() -> Bool {
-            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-            return list.contains { $0[kCGWindowOwnerName as String] as? String == "Spotlight" }
-        }
-        func key(_ keyCode: CGKeyCode, _ flags: CGEventFlags = []) {
-            for down in [true, false] {
-                let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
-                event?.flags = flags
-                event?.post(tap: .cghidEventTap)
-                usleep(30_000)
+            // Перевод выделенного вставкой из буфера здесь не проверяется: приложение ждёт ответа на свой ⌘C,
+            // а отвечать в собственном окне должно оно же. Этот случай проверяется руками в другом приложении.
+
+            // 3. Перевод сочетанием: обычный режим, зажатые клавиши.
+            fresh(ru) { $0.autoSwitch = false }
+            keys(hello); pause(0.3)
+            key(59, .maskControl, down: true); key(56, [.maskControl, .maskShift], down: true)
+            key(space, [.maskControl, .maskShift])
+            key(56, .maskControl, down: false); key(59, [], down: false); pause(0.8)
+            check("⌃⇧Space переводит недописанное слово", text(), "hello")
+            undoKey(); pause()
+            check("⌘Z отменяет ручной перевод", text(), "руддщ")
+
+            // 4. Перехват системного сочетания ⌃Space.
+            fresh(ru) { $0.autoSwitch = false; $0.overrideSystem = true
+                        $0.combo = KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags.control.rawValue) }
+            pause(0.5)
+            check("перехват включился", onMain { state.capturing })
+            keys(hello); pause(0.3)
+            key(59, .maskControl, down: true); key(space, .maskControl); key(59, [], down: false); pause(0.8)
+            check("перехваченный ⌃Space переводит слово", text(), "hello")
+            check("система по ⌃Space язык не сменила", onMain { InputSources.currentID() }, en)
+
+            // 5. Сочетание из одних модификаторов.
+            fresh(ru) { $0.autoSwitch = false
+                        $0.combo = KeyCombo(keyCode: KeyCombo.modifiersOnly, modifiers: NSEvent.ModifierFlags([.control, .shift]).rawValue) }
+            keys(hello); pause(0.3)
+            key(59, .maskControl, down: true); key(56, [.maskControl, .maskShift], down: true)
+            key(56, .maskControl, down: false); key(59, [], down: false); pause(0.8)
+            check("⌃⇧ без клавиши переводит слово", text(), "hello")
+
+            // 6. Слово в двух раскладках.
+            fresh(en)
+            keys([5, 4, 11]); pause(0.3)
+            layout(ru)
+            keys([2, 17, 45, space]); pause()
+            check("слово, начатое в английской и законченное в русской", text(), "привет ")
+            fresh(en) { $0.mixedWords = false }
+            keys([5, 4, 11]); pause(0.3)
+            layout(ru)
+            keys([2, 17, 45, space]); pause()
+            check("с выключенной настройкой смешанное слово не трогаем", text(), "ghbвет ")
+
+            // 7. Язык соседних слов.
+            fresh(ru)
+            keys(privet + [space, 15, 3, 15, space]); pause(0.3)
+            layout(en)
+            keys([z, space]); pause()
+            check("после русских слов «z» сразу становится «я»", text(), "привет как я ")
+            fresh(ru) { $0.contextAware = false }
+            keys(privet + [space, 15, 3, 15, space]); pause(0.3)
+            layout(en)
+            keys([z, space]); pause()
+            check("без учёта соседних слов «z» ждёт подтверждения", text(), "привет как z ")
+
+            // 8. Самообучение: дважды перевели слово сами — третий раз оно исправляется само.
+            let garbage: [CGKeyCode] = [12, 13, 6, 7]   // qwzx → йцяч: такого слова нет ни в одном словаре
+            fresh(en) { $0.learnThreshold = 2 }
+            for _ in 0..<2 {
+                layout(en)
+                onMain { view?.string = ""; state.debugResetSession() }
+                keys(garbage + [space]); pause(0.4)
+                key(59, .maskControl, down: true); key(56, [.maskControl, .maskShift], down: true)
+                key(space, [.maskControl, .maskShift])
+                key(56, .maskControl, down: false); key(59, [], down: false); pause(0.8)
             }
-        }
-        func onMain<T>(_ work: () -> T) -> T { DispatchQueue.main.sync(execute: work) }
-        let log = FileManager.default.temporaryDirectory.appendingPathComponent("spottest.txt")
-        var lines: [String] = []
-        func note(_ line: String) { lines.append(line); try? lines.joined(separator: "\n").write(to: log, atomically: true, encoding: .utf8) }
-        let state = AppState.shared
-        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-            let combo = onMain { state.combo }
-            var flags: CGEventFlags = []
-            if combo.flags.contains(.control) { flags.insert(.maskControl) }
-            if combo.flags.contains(.option) { flags.insert(.maskAlternate) }
-            if combo.flags.contains(.shift) { flags.insert(.maskShift) }
-            if combo.flags.contains(.command) { flags.insert(.maskCommand) }
-            let russian = onMain { InputSources.currentID() }.contains("Russian")
-            note("сочетание \(combo.display), перехват \(onMain { state.capturing }), раскладка русская: \(russian)")
-            key(49, .maskCommand)
-            sleep(1)
-            guard spotlightOpen(), !combo.isModifiersOnly else { note("отменено: Spotlight не открылся"); exit(0) }
-            for code: CGKeyCode in russian ? [4, 14, 37, 37, 31] : [5, 4, 11, 2, 17, 45] { key(code) }
-            usleep(700_000)
-            key(CGKeyCode(combo.keyCode), flags)
-            sleep(2)
-            let pasteboard = NSPasteboard.general
-            let snapshot = onMain { PasteboardSnapshot(pasteboard) }
-            let before = pasteboard.changeCount
-            key(0, .maskCommand)
-            key(8, .maskCommand)
-            usleep(500_000)
-            let text = pasteboard.changeCount != before ? (pasteboard.string(forType: .string) ?? "<не текст>") : "<ничего не скопировалось>"
-            note("набрано \(russian ? "руддщ" : "ghbdtn"), в строке после перевода: [\(text)]")
-            onMain { snapshot.restore(to: pasteboard) }
-            if spotlightOpen() { key(53) }
-            usleep(300_000)
-            if spotlightOpen() { key(53) }
-            exit(0)
+            check("ручной перевод готового слова", text(), "йцяч ")
+            check("слово запомнено после двух переводов", onMain { state.settings.learned["qwzx"] != nil })
+            layout(en)
+            onMain { view?.string = ""; state.debugResetSession() }
+            keys(garbage + [space]); pause()
+            check("запомненное слово исправляется само", text(), "йцяч ")
+
+            // 9. Исключение только для одного приложения и приложение без исправлений.
+            fresh(ru) { $0.appExceptions = [own: ["руддщ"]] }
+            keys(hello + [space]); pause()
+            check("исключение приложения действует в нём", text(), "руддщ ")
+            fresh(ru) { $0.appExceptions = ["com.example.other": ["руддщ"]] }
+            keys(hello + [space]); pause()
+            check("исключение чужого приложения здесь не действует", text(), "hello ")
+            fresh(ru) { $0.rememberUndone = .currentApp }
+            keys(hello + [space]); pause()
+            undoKey(); pause()
+            check("отменённое слово запоминается для приложения",
+                  onMain { state.settings.appExceptions[own] ?? [] }.joined() + "|" + onMain { state.settings.exceptions }.joined(), "руддщ|")
+            fresh(ru) { $0.excludedApps = [own] }
+            keys(hello + [space]); pause()
+            check("в приложении без исправлений ничего не меняется", text(), "руддщ ")
+
+            // 10. Пауза.
+            fresh(ru)
+            onMain { state.pause(minutes: nil) }
+            keys(hello + [space]); pause()
+            check("на паузе слово не исправляется", text(), "руддщ ")
+            onMain { state.resume(); view?.string = ""; state.debugReset() }
+            pause(0.5)
+            keys(hello + [space]); pause()
+            check("после паузы снова исправляется", text(), "hello ")
+
+            // 11. Spotlight — по отдельной просьбе: открывает строку поиска поверх всего.
+            if CommandLine.arguments.contains("--spotlight") {
+                func spotlightOpen() -> Bool {
+                    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+                    return list.contains { $0[kCGWindowOwnerName as String] as? String == "Spotlight" }
+                }
+                func post(_ code: CGKeyCode, _ flags: CGEventFlags = []) {
+                    for isDown in [true, false] {
+                        let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: isDown)
+                        event?.flags = flags
+                        event?.post(tap: .cghidEventTap)
+                        usleep(25_000)
+                    }
+                }
+                fresh(ru) { $0.autoSwitch = false; $0.overrideSystem = true; $0.hudEnabled = false
+                            $0.combo = KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags.control.rawValue) }
+                pause(0.5)
+                key(space, .maskCommand); pause(1)
+                if spotlightOpen() {
+                    hello.forEach { post($0) }; pause(0.7)
+                    post(space, .maskControl); pause(1.5)
+                    let pasteboard = NSPasteboard.general
+                    let snapshot = onMain { PasteboardSnapshot(pasteboard) }
+                    let before = pasteboard.changeCount
+                    if spotlightOpen() { post(0, .maskCommand); post(8, .maskCommand) }
+                    pause(0.5)
+                    let got = pasteboard.changeCount != before ? (pasteboard.string(forType: .string) ?? "") : "<не скопировалось>"
+                    onMain { snapshot.restore(to: pasteboard) }
+                    if spotlightOpen() { post(53) }
+                    pause(0.3)
+                    if spotlightOpen() { post(53) }
+                    check("перевод в строке Spotlight", got, "hello")
+                } else {
+                    failed += 1
+                    note("ОШИБКА  Spotlight не открылся")
+                }
+            }
+
+            finish(failed == 0 ? "ИТОГ: всё в порядке" : "ИТОГ: ошибок — \(failed)")
         }
     }
 
     static func runIfRequested() {
         renderIfRequested()
-        spotTestIfRequested()
-        spotProbeIfRequested()
-        axProbeIfRequested()
-        typeTestIfRequested()
-        captureTestIfRequested()
-        activeTestIfRequested()
+        uiTestIfRequested()
         guard CommandLine.arguments.contains("--selftest") else { return }
         let sources = InputSources()
         print("sandbox:", ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] ?? "no")
@@ -348,6 +343,10 @@ enum SelfTest {
                 print("restored:", InputSources.currentID() == start.current.id, "notifications:", sources.notificationCount)
             }
         }
+        // Как прочитаются настоящие настройки (в том числе сохранённые версиями до 1.2).
+        let saved = Settings.load(from: .standard)
+        print("settings: combo", saved.combo.display, "override", saved.overrideSystem, "auto", saved.autoSwitch,
+              "hotkey", saved.hotkeyEnabled, "exceptions", saved.exceptions.count, "excluded apps", saved.excludedApps.count)
         guard let context = sources.context() else { print("no context"); exit(1) }
         print("current:", context.current.id, "others:", context.others.map(\.id))
         let detector = LayoutDetector(validator: SpellValidator())

@@ -9,8 +9,7 @@ struct RaskladushkaApp: App {
         MenuBarExtra {
             MenuContent().environmentObject(state)
         } label: {
-            Image(systemName: state.needsPermissions ? "keyboard.badge.ellipsis"
-                  : (state.autoSwitchEnabled || state.hotkeyEnabled) ? "keyboard.fill" : "keyboard")
+            MenuBarLabel().environmentObject(state)
         }
         .menuBarExtraStyle(.menu)
     }
@@ -23,9 +22,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
         AppState.shared.start()
         // При первом запуске показываем окно: оно объясняет, какие разрешения нужны и зачем.
-        if !UserDefaults.standard.bool(forKey: "launchedBefore") || CommandLine.arguments.contains("--render") {
+        let arguments = CommandLine.arguments
+        if arguments.contains("--render") {
+            if arguments.contains("--onboarding") { OnboardingWindow.show() } else { SettingsWindow.show() }
+        } else if !arguments.contains("--uitest"), !UserDefaults.standard.bool(forKey: "launchedBefore") {
             UserDefaults.standard.set(true, forKey: "launchedBefore")
-            SettingsWindow.show()
+            OnboardingWindow.show()
         }
     }
 
@@ -38,34 +40,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
-struct MenuContent: View {
+/// Значок в строке меню: клавиатура, буквы языка или флаг — как выбрано в настройках.
+struct MenuBarLabel: View {
     @EnvironmentObject private var state: AppState
 
     var body: some View {
         if state.needsPermissions {
-            Button("⚠️ Нужны разрешения…") { showSettings() }
+            Image(systemName: "keyboard.badge.ellipsis")
+        } else if state.isPaused {
+            Image(systemName: "pause.circle")
+        } else if state.flashing {
+            Image(systemName: "checkmark.circle.fill")
+        } else {
+            switch state.settings.iconStyle {
+            case .symbol:
+                Image(systemName: (state.settings.autoSwitch || state.settings.hotkeyEnabled) ? "keyboard.fill" : "keyboard")
+            case .letters:
+                Text(LanguageBadge.letters(state.currentLanguage))
+            case .flag:
+                Text(LanguageBadge.flag(state.currentLanguage))
+            }
+        }
+    }
+}
+
+struct MenuContent: View {
+    @EnvironmentObject private var state: AppState
+
+    private static let time: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    var body: some View {
+        if state.needsPermissions {
+            Button("⚠️ Нужны разрешения…") { SettingsWindow.show() }
             Divider()
         }
-        Toggle("Автопереключение раскладки", isOn: $state.autoSwitchEnabled)
-        Toggle(String(format: NSLocalizedString("Перевод выделенного по %@", comment: ""), state.combo.display),
-               isOn: $state.hotkeyEnabled)
+        if state.isPaused {
+            Text(pauseTitle)
+            Button("Продолжить работу") { state.resume() }
+            Divider()
+        }
+        Toggle("Автопереключение раскладки", isOn: $state.settings.autoSwitch)
+        Toggle(L("Перевод выделенного по %@", state.settings.combo.display), isOn: $state.settings.hotkeyEnabled)
         if let app = state.lastApp {
-            Toggle(String(format: NSLocalizedString("Не исправлять в «%@»", comment: ""), app.name),
+            Toggle(L("Не исправлять в «%@»", app.name),
                    isOn: Binding(get: { state.isExcluded(app.bundleID) },
                                  set: { _ in state.toggleExcluded(app.bundleID) }))
+        }
+        if !state.isPaused {
+            Menu("Приостановить") {
+                Button("На 5 минут") { state.pause(minutes: 5) }
+                Button("На 30 минут") { state.pause(minutes: 30) }
+                if ![5, 30].contains(state.settings.pauseMinutes) {
+                    Button(L("На %d мин", state.settings.pauseMinutes)) { state.pause(minutes: state.settings.pauseMinutes) }
+                }
+                Button("До перезапуска Раскладушки") { state.pause(minutes: nil) }
+            }
+        }
+        if state.settings.showStats {
+            Divider()
+            Text(L("Исправлено сегодня: %d · всего: %d", state.stats.today, state.stats.total))
         }
         Divider()
         Toggle("Запускать при входе в систему",
                isOn: Binding(get: { state.launchAtLogin }, set: { state.setLaunchAtLogin($0) }))
-        Button("Настройки…") { showSettings() }
+        #if DIRECT
+        Button("Проверить обновления…") { Updater.shared.check() }
+        #endif
+        Button("Настройки…") { SettingsWindow.show() }
             .keyboardShortcut(",")
         Divider()
         Button("Завершить Раскладушку") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 
-    private func showSettings() {
-        SettingsWindow.show()
+    private var pauseTitle: String {
+        guard let until = state.pausedUntil, until != .distantFuture else { return L("Пауза до перезапуска") }
+        return L("Пауза до %@", Self.time.string(from: until))
     }
 }
 
@@ -77,7 +131,7 @@ enum SettingsWindow {
         if window == nil {
             let controller = NSHostingController(rootView: SettingsView().environmentObject(AppState.shared))
             let created = NSWindow(contentViewController: controller)
-            created.title = NSLocalizedString("Раскладушка", comment: "")
+            created.title = L("Раскладушка")
             created.styleMask = [.titled, .closable, .miniaturizable]
             created.isReleasedWhenClosed = false
             created.center()

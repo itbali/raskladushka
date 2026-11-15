@@ -38,12 +38,32 @@
 ## Релиз на GitHub
 
 ```bash
-Tools/release-github.sh            # build/github/Raskladushka-<версия>.dmg: Developer ID, нотаризация Apple
+Tools/release-github.sh            # build/github/Raskladushka-<версия>.dmg и appcast.xml: Developer ID, нотаризация
 Tools/release-github.sh --draft    # то же и черновик релиза v<версия> с текстом из AppStore/release-notes/
 ```
 
-Нужны те же настройки, что для App Store (`Tools/appstore/config.env`), и сертификат «Developer ID Application»
-в связке ключей. Выпустить его может только владелец аккаунта; если Xcode отказывает («This operation can only
-be performed by the Account Holder»), сертификат выпускается на developer.apple.com → Certificates → «+» →
-Developer ID Application по файлу запроса. Перед запуском: поднять версию в `project.yml` и написать
-`AppStore/release-notes/<версия>.md`. Черновик публикуется кнопкой «Publish release» на GitHub.
+Порядок: поднять версию и номер сборки в `project.yml` → написать `AppStore/release-notes/<версия>.md` →
+`open build/Build/Products/Debug/Raskladushka.app --args --uitest --spotlight` (все строки «ок») →
+`Tools/release-github.sh --draft` → опубликовать черновик на GitHub → закоммитить и запушить `appcast.xml`
+(по нему установленные копии узнают о новой версии) → `Tools/update-cask.sh <образ> <папка homebrew-tap>`
+и запушить tap.
+
+Что нужно на компьютере:
+- настройки App Store Connect (`Tools/appstore/config.env`) — ими сборка отправляется на нотаризацию;
+- сертификат «Developer ID Application» в связке ключей. Выпустить его может только владелец аккаунта; если
+  Xcode отказывает («This operation can only be performed by the Account Holder»), сертификат выпускается на
+  developer.apple.com → Certificates → «+» → Developer ID Application по файлу запроса;
+- ключ подписи обновлений Sparkle в связке ключей (запись `raskladushka`; создаётся `generate_keys --account
+  raskladushka`). Его открытая часть вписана в `project.yml` (`SUPublicEDKey`). Потеряете закрытую — уже
+  установленные копии не примут обновления, сохраните его: `generate_keys --account raskladushka -x файл`;
+- `dmgbuild` (`pip install dmgbuild`) — чтобы у окна образа был фон со стрелкой; без него образ получится простым.
+
+Собирается цель `RaskladushkaDirect`: то же приложение плюс Sparkle. В цель для App Store (`Raskladushka`,
+`Tools/release.sh`) Sparkle не входит — свой механизм обновления в магазине запрещён.
+
+## Перед следующей отправкой в App Store
+
+Заметки для проверяющих (`review-notes.md`) описывают версию 1.0.0. С тех пор появилось: необязательный
+активный перехват (настройка «Перехватывать системные сочетания», по умолчанию выключена), счётчик,
+выученные слова на диске, глобальные сочетания ⌘Z и ⇧⌘Z на время после замены. Перед отправкой новой версии
+заметки, описание в `metadata.md` и политику на сайте нужно привести в соответствие.

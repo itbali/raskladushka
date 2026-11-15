@@ -12,6 +12,10 @@ final class InputSources {
     private var expectedSince = Date.distantPast
     private(set) var notificationCount = 0
     var onUserChangedLayout: (() -> Void)?
+    /// Раскладка сменилась — неважно, кем.
+    var onLayoutChanged: (() -> Void)?
+    /// Названия раскладок, как их показывает система.
+    private(set) var names: [String: String] = [:]
 
     init() {
         reload()
@@ -32,6 +36,7 @@ final class InputSources {
             expectedID = nil
             onUserChangedLayout?()
         }
+        onLayoutChanged?()
     }
 
     @objc private func enabledChanged() {
@@ -47,15 +52,18 @@ final class InputSources {
         guard let list = TISCreateInputSourceList(filter, false)?.takeRetainedValue() as? [TISInputSource] else { return }
         var tables: [LayoutTable] = []
         var sources: [String: TISInputSource] = [:]
+        var names: [String: String] = [:]
         for source in list {
             guard Self.string(source, kTISPropertyInputSourceType) == (kTISTypeKeyboardLayout as String),
                   let id = Self.string(source, kTISPropertyInputSourceID),
                   let table = Self.buildTable(source: source, id: id) else { continue }
             tables.append(table)
             sources[id] = source
+            names[id] = Self.string(source, kTISPropertyLocalizedName) ?? id
         }
         self.tables = tables
         self.sources = sources
+        self.names = names
     }
 
     /// Текущая раскладка и остальные (сначала недавно использованные). `nil`, если активен метод ввода, а не раскладка.
@@ -81,6 +89,15 @@ final class InputSources {
         lastUsed[id] = Date()
         TISSelectInputSource(source)
     }
+
+    #if DEBUG
+    /// Для проверок: переключение, которое приложение примет за сделанное человеком.
+    func selectAsUser(_ id: String) {
+        guard let source = sources[id] else { return }
+        expectedID = nil
+        TISSelectInputSource(source)
+    }
+    #endif
 
     // MARK: - Carbon
 

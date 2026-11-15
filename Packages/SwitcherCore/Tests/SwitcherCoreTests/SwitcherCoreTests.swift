@@ -220,6 +220,224 @@ final class SwitcherCoreTests: XCTestCase {
         XCTAssertEqual(s.undoLast(), Replacement(deleteCount: 15, insert: "ghbdtn rfr ltkf", switchTo: en.id))
     }
 
+    // MARK: Отмена по Backspace и повтор
+
+    func testBackspaceUndoesAutoConversion() {
+        let s = TypingSession(detector: detector)
+        _ = type("ghbdtn ", layout: en, session: s, ctx: enCtx)
+        XCTAssertTrue(s.canUndoByBackspace)
+        // Пробел человек стёр сам — возвращаем слово без него, и оно снова недописанное.
+        // В исключения слово при этом не попадает: Backspace жмут и просто чтобы стереть пробел.
+        XCTAssertEqual(s.handle(.backspace, context: ruCtx),
+                       Replacement(deleteCount: 6, insert: "ghbdtn", switchTo: en.id))
+        XCTAssertFalse(s.canUndo)
+        XCTAssertEqual(s.tailText(context: enCtx), "ghbdtn")
+        // Пробел за тем же словом второй раз его не исправляет…
+        XCTAssertNil(s.handle(.stroke(KeyStroke(keyCode: 49)), context: enCtx))
+        XCTAssertEqual(s.tailText(context: enCtx), "ghbdtn ")
+        // …а следующее такое же слово — исправляет: исключением оно не стало.
+        XCTAssertEqual(type("ghbdtn ", layout: en, session: s, ctx: enCtx).first?.insert, "привет ")
+    }
+
+    func testWordChangedAfterBackspaceUndoIsCheckedAgain() {
+        let s = TypingSession(detector: detector)
+        _ = type("vbh ", layout: en, session: s, ctx: enCtx)       // «мир»
+        _ = s.handle(.backspace, context: ruCtx)
+        // Слово дописали — это уже другое слово, проверяем его заново.
+        XCTAssertNil(s.handle(.backspace, context: enCtx))
+        XCTAssertEqual(type("h ", layout: en, session: s, ctx: enCtx).first?.insert, "мир ")
+    }
+
+    func testBackspaceUndoCanBeTurnedOff() {
+        let s = TypingSession(detector: detector)
+        s.backspaceUndoEnabled = false
+        _ = type("ghbdtn ", layout: en, session: s, ctx: enCtx)
+        XCTAssertNil(s.handle(.backspace, context: ruCtx))
+        XCTAssertFalse(s.hasPendingWord)
+    }
+
+    func testBackspaceDoesNotUndoManualConversion() {
+        let s = TypingSession(detector: detector)
+        s.autoSwitchEnabled = false
+        _ = type("ghbdtn ", layout: en, session: s, ctx: enCtx)
+        _ = s.manualToggle(context: enCtx)
+        XCTAssertNil(s.handle(.backspace, context: ruCtx))
+    }
+
+    func testRedoAfterUndo() {
+        let s = TypingSession(detector: detector)
+        _ = type("z tot ljvjv ", layout: en, session: s, ctx: enCtx)
+        XCTAssertFalse(s.canRedo)
+        let undo = s.undoLast()
+        XCTAssertTrue(s.canRedo)
+        // Повтор возвращает замену и снимает исключение, которое запомнила отмена.
+        XCTAssertEqual(s.redoLast(), Replacement(deleteCount: 12, insert: "я еще домом ", switchTo: ru.id,
+                                                 forgetException: "ljvjv"))
+        XCTAssertFalse(s.canRedo)
+        XCTAssertEqual(s.tailText(context: ruCtx), "я еще домом ")
+        XCTAssertEqual(s.undoLast(), undo)
+    }
+
+    func testRedoGoneAfterAnyKey() {
+        let s = TypingSession(detector: detector)
+        _ = type("ghbdtn ", layout: en, session: s, ctx: enCtx)
+        _ = s.undoLast()
+        _ = s.handle(.stroke(KeyStroke(keyCode: 0)), context: enCtx)
+        XCTAssertFalse(s.canRedo)
+        XCTAssertNil(s.redoLast())
+    }
+
+    func testRedoManualToggle() {
+        let s = TypingSession(detector: detector)
+        s.autoSwitchEnabled = false
+        _ = type("ghbd", layout: en, session: s, ctx: enCtx)
+        _ = s.manualToggle(context: enCtx)
+        _ = s.undoLast()
+        XCTAssertEqual(s.redoLast(), Replacement(deleteCount: 4, insert: "прив", switchTo: ru.id))
+        XCTAssertEqual(s.tailText(context: ruCtx), "прив")
+    }
+
+    // MARK: Смешанные слова
+
+    func testWordStartedInOneLayoutFinishedInAnother() {
+        let s = TypingSession(detector: detector)
+        _ = type("ghb", layout: en, session: s, ctx: enCtx)
+        s.layoutChangedByUser()
+        XCTAssertEqual(s.tailText(context: ruCtx), "ghb")
+        XCTAssertEqual(type("вет ", layout: ru, session: s, ctx: ruCtx),
+                       [Replacement(deleteCount: 7, insert: "привет ", switchTo: ru.id)])
+        // Отмена возвращает слово кусками, как оно было набрано.
+        XCTAssertEqual(s.undoLast(), Replacement(deleteCount: 7, insert: "ghbвет ", switchTo: ru.id,
+                                                 learnedException: "ghbвет"))
+    }
+
+    func testLayoutSwitchedByShortcutMidWord() {
+        // ⌃Space посреди слова: уведомление о смене раскладки может опоздать, поэтому смотрим на следующую букву.
+        let s = TypingSession(detector: detector)
+        _ = type("при", layout: ru, session: s, ctx: ruCtx)
+        XCTAssertNil(s.handle(.softReset, context: ruCtx))
+        XCTAssertEqual(type("dtn ", layout: en, session: s, ctx: enCtx),
+                       [Replacement(deleteCount: 7, insert: "привет ", switchTo: ru.id)])
+    }
+
+    func testShortcutWithoutLayoutChangeDropsWord() {
+        let s = TypingSession(detector: detector)
+        _ = type("ghb", layout: en, session: s, ctx: enCtx)
+        _ = s.handle(.softReset, context: enCtx)
+        XCTAssertTrue(type("dtn ", layout: en, session: s, ctx: enCtx).isEmpty)
+        XCTAssertEqual(s.tailText(context: enCtx), "dtn ")
+    }
+
+    func testMixedWordsCanBeTurnedOff() {
+        let s = TypingSession(detector: detector)
+        s.mixedWordsEnabled = false
+        _ = type("ghb", layout: en, session: s, ctx: enCtx)
+        s.layoutChangedByUser()
+        XCTAssertTrue(type("вет ", layout: ru, session: s, ctx: ruCtx).isEmpty)
+    }
+
+    func testManualToggleOfMixedWord() {
+        let s = TypingSession(detector: detector)
+        s.autoSwitchEnabled = false
+        _ = type("ghb", layout: en, session: s, ctx: enCtx)
+        s.layoutChangedByUser()
+        _ = type("ве", layout: ru, session: s, ctx: ruCtx)
+        // Текущая раскладка русская — в неё и собираем, хотя начало набрано в английской.
+        XCTAssertEqual(s.manualToggle(context: ruCtx), Replacement(deleteCount: 5, insert: "приве", switchTo: ru.id))
+        XCTAssertEqual(s.undoLast(), Replacement(deleteCount: 5, insert: "ghbве", switchTo: ru.id))
+        XCTAssertEqual(s.tailText(context: ruCtx), "ghbве")
+    }
+
+    // MARK: Язык фразы
+
+    func testContextMakesWeakWordStrong() {
+        let s = TypingSession(detector: detector)
+        XCTAssertTrue(type("привет как ", layout: ru, session: s, ctx: ruCtx).isEmpty)
+        s.layoutChangedByUser()
+        // После двух русских слов «z» в английской раскладке — это «я», ждать подтверждения незачем.
+        XCTAssertEqual(type("z ", layout: en, session: s, ctx: enCtx),
+                       [Replacement(deleteCount: 2, insert: "я ", switchTo: ru.id)])
+    }
+
+    func testNoContextKeepsWeakWordWaiting() {
+        let s = TypingSession(detector: detector)
+        XCTAssertTrue(type("z ", layout: en, session: s, ctx: enCtx).isEmpty)
+        let off = TypingSession(detector: detector)
+        off.contextEnabled = false
+        _ = type("привет как ", layout: ru, session: off, ctx: ruCtx)
+        off.layoutChangedByUser()
+        XCTAssertTrue(type("z ", layout: en, session: off, ctx: enCtx).isEmpty)
+    }
+
+    // MARK: Выученные слова и три раскладки
+
+    func testLearnedWordIsConverted() {
+        var d = detector
+        XCTAssertNil(d.evaluate(strokes: strokes("qwzx", in: en), current: en, others: [ru]))
+        d.learned = ["qwzx": ru.id]
+        let found = d.evaluate(strokes: strokes("Qwzx", in: en), current: en, others: [ru])
+        XCTAssertEqual(found?.text, "Йцяч")
+        XCTAssertEqual(found?.reason, .learned)
+        d.exceptions = ["qwzx"]
+        XCTAssertNil(d.evaluate(strokes: strokes("qwzx", in: en), current: en, others: [ru]))
+    }
+
+    func testManualToggleReportsWordForLearning() {
+        let s = TypingSession(detector: detector)
+        s.autoSwitchEnabled = false
+        _ = type("qwzx ", layout: en, session: s, ctx: enCtx)
+        let first = s.manualToggle(context: enCtx)
+        XCTAssertEqual(first?.info?.manualWord?.typed, "qwzx")
+        XCTAssertEqual(first?.info?.manualWord?.layoutID, ru.id)
+        // Повторное нажатие на том же слове — уже не «перевёл сам», а перебор.
+        XCTAssertNil(s.manualToggle(context: ruCtx)?.info?.manualWord)
+    }
+
+    func testUndoByHotkeyIsNotLearning() {
+        let s = TypingSession(detector: detector)
+        _ = type("ghbdtn ", layout: en, session: s, ctx: enCtx)
+        XCTAssertNil(s.manualToggle(context: ruCtx)?.info?.manualWord)
+    }
+
+    static let german = LayoutTable.build(
+        id: "com.apple.keylayout.German", language: "de",
+        lower: ["^1234567890ß´", "qwertzuiopü+#", "asdfghjklöä", "yxcvbnm,.-"],
+        upper: ["°!\"§$%&/()=?`", "QWERTZUIOPÜ*'", "ASDFGHJKLÖÄ", "YXCVBNM;:_"]
+    )
+
+    func testBestOfThreeLayouts() {
+        let de = Self.german
+        // Немецкая стоит первой, но слово получается только в русской.
+        let found = detector.evaluate(strokes: strokes("ghbdtn", in: en), current: en, others: [de, ru])
+        XCTAssertEqual(found?.text, "привет")
+        XCTAssertEqual(found?.layoutID, ru.id)
+    }
+
+    func testManualToggleWithThreeLayouts() {
+        let de = Self.german
+        let ctx = LayoutContext(current: en, others: [de, ru])
+        let s = TypingSession(detector: detector)
+        s.autoSwitchEnabled = false
+        // «z» и «y» в немецкой раскладке поменяны местами: «yt» по-немецки «zt», по-русски «не».
+        _ = type("ljvjv ", layout: en, session: s, ctx: ctx)
+        XCTAssertEqual(s.manualToggle(context: ctx), Replacement(deleteCount: 6, insert: "домом ", switchTo: ru.id))
+        // Дальше нажатия перебирают раскладки по кругу.
+        let next = s.manualToggle(context: LayoutContext(current: ru, others: [en, de]))
+        XCTAssertEqual(next?.insert, "ljvjv ")
+        XCTAssertEqual(next?.switchTo, en.id)
+    }
+
+    func testReasons() {
+        XCTAssertEqual(eval("ghbdtn", from: en, to: ru)?.reason, .dictionary)
+        XCTAssertEqual(eval("hfcrkflre", from: en, to: ru)?.reason, .letterStatistics)
+        XCTAssertEqual(eval("z", from: en, to: ru)?.reason, .commonWord)
+        let info = type("ghbdtn ", layout: en, session: TypingSession(detector: detector), ctx: enCtx).first?.info
+        XCTAssertEqual(info?.kind, .auto)
+        XCTAssertEqual(info?.before, "ghbdtn")
+        XCTAssertEqual(info?.after, "привет")
+        XCTAssertEqual(info?.words, 1)
+    }
+
     func testNothingToToggle() {
         let s = TypingSession(detector: detector)
         XCTAssertNil(s.manualToggle(context: enCtx))

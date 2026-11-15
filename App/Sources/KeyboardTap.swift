@@ -15,6 +15,8 @@ final class KeyboardTap {
         case flagsChanged(flags: CGEventFlags)
         /// Нажатие, которое перехватчик забрал себе и дальше не пустил.
         case captured(keyCode: UInt16, flags: CGEventFlags, isRepeat: Bool)
+        /// macOS отключила перехватчик (он долго не отвечал), и мы включили его снова.
+        case reenabled
     }
 
     var handler: ((Event) -> Void)?
@@ -126,6 +128,8 @@ final class KeyboardTap {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             if let port { CGEvent.tapEnable(tap: port, enable: true) }
+            // Отключение «пользовательским вводом» — обычное дело при вводе пароля, о нём не сообщаем.
+            if type == .tapDisabledByTimeout { DispatchQueue.main.async { [weak self] in self?.handler?(.reenabled) } }
         case .keyDown:
             guard event.getIntegerValueField(.eventSourceUserData) != syntheticEventMarker else { return false }
             let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
