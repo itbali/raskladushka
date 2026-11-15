@@ -22,7 +22,7 @@ cask "raskladushka" do
   homepage "https://github.com/itbali/raskladushka"
 
   auto_updates true
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "Raskladushka.app"
 
