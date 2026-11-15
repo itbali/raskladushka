@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Раскладушка</title>
+    <link>https://github.com/itbali/raskladushka</link>
+    <item>
+      <title>Раскладушка 1.2.0</title>
+      <link>https://github.com/itbali/raskladushka/releases/tag/v1.2.0</link>
+      <sparkle:version>4</sparkle:version>
+      <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/itbali/raskladushka/releases/tag/v1.2.0</sparkle:releaseNotesLink>
+      <pubDate>Sun, 15 Nov 2026 22:21:05 +0000</pubDate>
+      <enclosure url="https://github.com/itbali/raskladushka/releases/download/v1.2.0/Raskladushka-1.2.0.dmg"
+                 sparkle:edSignature="Yc/o2/hW3jdSUesGIGBcq+zXxt6yP2ZZCEwc0JgufpFC3u1+EhuHm6Z11fzXDuZbYPxu+J4emBZ6ZXau/Xn2DQ==" length="3600201" type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>
