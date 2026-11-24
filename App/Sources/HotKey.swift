@@ -12,8 +12,14 @@ struct KeyCombo: Equatable, Codable {
     /// Вместо кода клавиши: сочетание из одних модификаторов (например, ⌃⇧). Срабатывает, когда
     /// их нажали и отпустили, не тронув больше ничего. Carbon так не умеет — следит перехватчик.
     static let modifiersOnly: UInt16 = 0xFFFF
+    /// Вместо кода клавиши: двойное нажатие одного модификатора (⇧ ⇧). Удобно тем, кому трудно
+    /// зажимать несколько клавиш сразу.
+    static let doubleTap: UInt16 = 0xFFFE
 
     var isModifiersOnly: Bool { keyCode == Self.modifiersOnly }
+    var isDoubleTap: Bool { keyCode == Self.doubleTap }
+    /// Сочетание без обычной клавиши: за ним следит перехватчик, Carbon такого не умеет.
+    var isTapBased: Bool { isModifiersOnly || isDoubleTap }
 
     static func modifiers(_ cgFlags: CGEventFlags) -> NSEvent.ModifierFlags {
         var pressed: NSEvent.ModifierFlags = []
@@ -36,7 +42,7 @@ struct KeyCombo: Equatable, Codable {
     }
 
     func matches(keyCode: UInt16, flags cgFlags: CGEventFlags) -> Bool {
-        guard keyCode == self.keyCode, !isModifiersOnly else { return false }
+        guard keyCode == self.keyCode, !isTapBased else { return false }
         return Self.modifiers(cgFlags) == flags
     }
 
@@ -46,6 +52,7 @@ struct KeyCombo: Equatable, Codable {
         if flags.contains(.option) { text += "⌥" }
         if flags.contains(.shift) { text += "⇧" }
         if flags.contains(.command) { text += "⌘" }
+        if isDoubleTap { return text + " " + text }
         return isModifiersOnly ? text : text + Self.keyName(keyCode)
     }
 
@@ -96,7 +103,7 @@ final class HotKey {
     func register(_ combo: KeyCombo?) -> Bool {
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
         hotKeyRef = nil
-        guard let combo, !combo.isModifiersOnly else { return true }
+        guard let combo, !combo.isTapBased else { return true }
         let hotKeyID = EventHotKeyID(signature: OSType(0x5241_534B), id: id)
         let status = RegisterEventHotKey(UInt32(combo.keyCode), combo.carbonModifiers, hotKeyID,
                                          GetApplicationEventTarget(), 0, &hotKeyRef)

@@ -21,11 +21,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SelfTest.runIfRequested()
         #endif
         AppState.shared.start()
+        ServiceProvider.shared.register()
         // При первом запуске показываем окно: оно объясняет, какие разрешения нужны и зачем.
         let arguments = CommandLine.arguments
         if arguments.contains("--render") {
             if arguments.contains("--onboarding") { OnboardingWindow.show() } else { SettingsWindow.show() }
-        } else if !arguments.contains("--uitest"), !UserDefaults.standard.bool(forKey: "launchedBefore") {
+        } else if !arguments.contains("--uitest"), !arguments.contains("--servicetest"),
+                  !UserDefaults.standard.bool(forKey: "launchedBefore") {
             UserDefaults.standard.set(true, forKey: "launchedBefore")
             OnboardingWindow.show()
         }

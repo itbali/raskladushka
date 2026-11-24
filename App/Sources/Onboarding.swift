@@ -55,23 +55,27 @@ struct OnboardingView: View {
                 Spacer()
                 if step > 0 { Button("Назад") { step -= 1 } }
                 if step < 2 {
-                    Button(step == 1 && !solved ? L("Пропустить") : L("Дальше")) { step += 1 }
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(step == 0 && !state.canPostEvents)
+                    // Разрешение необязательно: без него остаётся перевод выделенного через меню «Службы».
+                    Button((step == 1 && !solved) || (step == 0 && !state.canPostEvents) ? L("Пропустить") : L("Дальше")) {
+                        step += (step == 0 && !state.canPostEvents) ? 2 : 1
+                    }
+                    .keyboardShortcut(.defaultAction)
                 } else {
                     Button("Готово") { OnboardingWindow.close() }.keyboardShortcut(.defaultAction)
                 }
             }
         }
         .padding(24)
-        .frame(width: 520, height: 420)
+        .frame(width: 540, height: 480)
     }
 
     private var permissions: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Сначала — одно разрешение").font(.title3.bold())
+            Text("Одно разрешение — по желанию").font(.title3.bold())
             Text("Чтобы стереть слово в неверной раскладке и напечатать его заново, Раскладушке нужно разрешение «Универсальный доступ». Нажатия обрабатываются только в памяти вашего Mac и никуда не отправляются.")
                 .fixedSize(horizontal: false, vertical: true)
+            Text("Без разрешения Раскладушка тоже работает: выделите текст и выберите «Перевести раскладку» в меню «Службы» или по правому щелчку.")
+                .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             PermissionRow(title: "Управление клавиатурой",
                           detail: "Системные настройки → Конфиденциальность и безопасность → Универсальный доступ.",
                           granted: state.canPostEvents) { state.requestPostAccess() }
@@ -112,6 +116,8 @@ struct OnboardingView: View {
             Text("Что ещё умеет Раскладушка").font(.title3.bold())
             Label(L("%@ — перевести выделенный текст или последнее слово", state.settings.combo.display), systemImage: "command")
             Label("⌘Z или Backspace сразу после замены — вернуть как было", systemImage: "arrow.uturn.backward")
+            Label("Меню «Службы» → «Перевести раскладку» — перевод выделенного без сочетаний и разрешений", systemImage: "contextualmenu.and.cursorarrow")
+            Label("Вкладка «Доступность» — голос, крупная подсказка, сочетание двойным нажатием", systemImage: "accessibility")
             Label("Значок в строке меню — пауза, исключения и настройки", systemImage: "menubar.arrow.up.rectangle")
             Toggle("Запускать при входе в систему",
                    isOn: Binding(get: { state.launchAtLogin }, set: { state.setLaunchAtLogin($0) }))

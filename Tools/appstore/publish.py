@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Заполняет карточку «Раскладушки» в App Store Connect и отправляет версию на проверку.
 
-    python3 Tools/appstore/publish.py --dry-run     # показать, что будет сделано
-    python3 Tools/appstore/publish.py               # заполнить всё, кроме отправки
-    python3 Tools/appstore/publish.py --submit      # заполнить и отправить на проверку
+    /usr/bin/python3 Tools/appstore/publish.py --dry-run     # показать, что будет сделано
+    /usr/bin/python3 Tools/appstore/publish.py               # заполнить всё, кроме отправки
+    /usr/bin/python3 Tools/appstore/publish.py --submit      # заполнить и отправить на проверку
+    /usr/bin/python3 Tools/appstore/publish.py --withdraw    # снять с проверки отклонённую или ждущую отправку
+    … --replace-screenshots                                  # заменить уже загруженные скриншоты новыми
+
+Запускать системным Python: у отдельно установленного может не быть корневых сертификатов.
 
 Нужно заранее: запись приложения в App Store Connect (API её создавать не умеет), загруженная сборка
 (Tools/release.sh --upload) и опубликованные страницы поддержки и политики (папка Site/).
@@ -24,6 +28,7 @@ SHOT_TYPE = "APP_DESKTOP"
 DRY = "--dry-run" in sys.argv
 SUBMIT = "--submit" in sys.argv
 REPLACE_SHOTS = "--replace-screenshots" in sys.argv
+WITHDRAW = "--withdraw" in sys.argv
 LABELS = {
     "ru": {"name": "Название", "subtitle": "Подзаголовок", "promo": "Рекламный текст", "keywords": "Ключевые слова",
            "description": "Описание"},
@@ -147,6 +152,21 @@ def main():
         sys.exit(f"В App Store Connect нет приложения с идентификатором {BUNDLE}: создайте запись (Приложения → «+»).")
     app = found[0]
     app_id = app["id"]
+
+    if WITHDRAW:
+        # Снять с проверки отправку, по которой Apple ждёт ответа (или которая ещё в очереди).
+        # После этого версия снова редактируется, и её можно отправить заново обычным --submit.
+        pending = [s for s in get_all(f"/v1/reviewSubmissions?filter%5Bapp%5D={app_id}&filter%5Bplatform%5D={PLATFORM}")
+                   if s["attributes"]["state"] in ("UNRESOLVED_ISSUES", "WAITING_FOR_REVIEW", "READY_FOR_REVIEW")]
+        if not pending:
+            say("нет отправок, которые можно снять")
+        for sub in pending:
+            say("withdraw submission", sub["id"], sub["attributes"]["state"])
+            if not DRY:
+                done = call("PATCH", f"/v1/reviewSubmissions/{sub['id']}", {"data": {
+                    "type": "reviewSubmissions", "id": sub["id"], "attributes": {"canceled": True}}})["data"]
+                say("  now:", done["attributes"]["state"])
+        return
     version_str = re.search(r'MARKETING_VERSION: "([^"]+)"', open(f"{ROOT}/project.yml").read()).group(1)
     build_str = re.search(r'CURRENT_PROJECT_VERSION: "([^"]+)"', open(f"{ROOT}/project.yml").read()).group(1)
 

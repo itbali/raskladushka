@@ -438,6 +438,34 @@ final class SwitcherCoreTests: XCTestCase {
         XCTAssertEqual(info?.words, 1)
     }
 
+    // MARK: Двойное нажатие модификатора
+
+    func testDoubleTap() {
+        var d = DoubleTapDetector(interval: 0.4)
+        XCTAssertFalse(d.soloTap(1, at: 10.0))
+        XCTAssertTrue(d.soloTap(1, at: 10.3))
+        // После срабатывания счёт начинается заново: третье нажатие — снова первое.
+        XCTAssertFalse(d.soloTap(1, at: 10.5))
+        XCTAssertTrue(d.soloTap(1, at: 10.7))
+    }
+
+    func testDoubleTapTooSlowOrOtherKey() {
+        var d = DoubleTapDetector(interval: 0.4)
+        XCTAssertFalse(d.soloTap(1, at: 10.0))
+        XCTAssertFalse(d.soloTap(1, at: 10.6))      // медленно — это новое первое нажатие
+        XCTAssertTrue(d.soloTap(1, at: 10.8))
+        XCTAssertFalse(d.soloTap(1, at: 20.0))
+        XCTAssertFalse(d.soloTap(2, at: 20.1))      // другой модификатор
+        XCTAssertFalse(d.soloTap(1, at: 20.2))
+    }
+
+    func testDoubleTapInterrupted() {
+        var d = DoubleTapDetector(interval: 0.4)
+        XCTAssertFalse(d.soloTap(1, at: 10.0))
+        d.interrupted()                              // между нажатиями набрали букву
+        XCTAssertFalse(d.soloTap(1, at: 10.2))
+    }
+
     func testNothingToToggle() {
         let s = TypingSession(detector: detector)
         XCTAssertNil(s.manualToggle(context: enCtx))

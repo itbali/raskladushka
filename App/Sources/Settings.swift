@@ -48,6 +48,19 @@ enum HudPosition: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Когда проговаривать исправления вслух.
+enum SpeakMode: String, Codable, CaseIterable, Identifiable {
+    case off, voiceOver, always
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .off: return L("Никогда")
+        case .voiceOver: return L("Когда включён VoiceOver")
+        case .always: return L("Всегда")
+        }
+    }
+}
+
 /// Все настройки приложения. Хранятся одной записью; новые поля получают значения по умолчанию,
 /// даже если сохранённая запись старше.
 struct Settings: Codable, Equatable {
@@ -68,6 +81,8 @@ struct Settings: Codable, Equatable {
     var undoByBackspace = true
     var redoEnabled = true
     var rememberUndone = RememberUndone.everywhere
+    /// Сколько секунд может пройти между двумя нажатиями при сочетании «двойное нажатие».
+    var doubleTapInterval = 0.4
 
     // Исключения
     var exceptions: [String] = []
@@ -84,6 +99,12 @@ struct Settings: Codable, Equatable {
     var hudDuration = 2.0
     var hudForManual = false
     var showStats = true
+
+    // Доступность
+    var speakMode = SpeakMode.voiceOver
+    /// Во сколько раз увеличить подсказку на экране.
+    var hudScale = 1.0
+    var hudHighContrast = false
     var notifyTapRestored = true
 
     // Журнал

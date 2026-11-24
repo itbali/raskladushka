@@ -18,10 +18,11 @@ struct SettingsView: View {
             ShortcutsTab().tabItem { Label("Сочетания", systemImage: "command") }.tag(1)
             ExceptionsTab().tabItem { Label("Исключения", systemImage: "nosign") }.tag(2)
             FeedbackTab().tabItem { Label("Отклик", systemImage: "bell") }.tag(3)
-            JournalTab().tabItem { Label("Журнал", systemImage: "list.bullet.rectangle") }.tag(4)
-            AboutTab().tabItem { Label("О программе", systemImage: "info.circle") }.tag(5)
+            AccessibilityTab().tabItem { Label("Доступность", systemImage: "accessibility") }.tag(4)
+            JournalTab().tabItem { Label("Журнал", systemImage: "list.bullet.rectangle") }.tag(5)
+            AboutTab().tabItem { Label("О программе", systemImage: "info.circle") }.tag(6)
         }
-        .frame(width: 560, height: 600)
+        .frame(width: 660, height: 600)
     }
 }
 
@@ -80,7 +81,7 @@ private struct GeneralTab: View {
                             Text(word).font(.body.monospaced())
                             Text("→ " + state.layoutName(state.settings.learned[word] ?? "")).foregroundStyle(.secondary)
                             Spacer()
-                            Button { state.forgetLearned(word) } label: { Image(systemName: "minus.circle") }
+                            Button { state.forgetLearned(word) } label: { Image(systemName: "minus.circle").accessibilityLabel(Text("Удалить")) }
                                 .buttonStyle(.borderless)
                         }
                     }
@@ -108,7 +109,7 @@ private struct GeneralTab: View {
                     Label("Добавьте вторую раскладку в настройках клавиатуры macOS.", systemImage: "exclamationmark.triangle")
                         .font(.footnote).foregroundStyle(.orange)
                 }
-                Hint("Нажатия обрабатываются только в памяти вашего Mac: ничего не сохраняется и никуда не отправляется. Поля паролей не затрагиваются.")
+                Hint("Нажатия обрабатываются только в памяти вашего Mac и никуда не отправляются. На диск попадают только настройки, списки исключений и слова, которые вы сами перевели сочетанием. Поля паролей не затрагиваются.")
             }
 
             Section {
@@ -139,14 +140,32 @@ private struct ShortcutsTab: View {
                     Label("Это сочетание занято другой программой — выберите другое.", systemImage: "exclamationmark.triangle")
                         .font(.footnote).foregroundStyle(.orange)
                 }
-                Hint("Нажмите сочетание сразу после слова, чтобы перевести его или отменить автозамену. Если текст выделен — будет переведено выделение. Сочетанием могут быть и одни модификаторы, например ⌃⇧.")
-                Toggle("Перехватывать системные сочетания", isOn: $state.settings.overrideSystem)
-                    .disabled(!state.settings.hotkeyEnabled)
-                Hint("Позволяет назначить сочетание, занятое самой macOS: ⌘Space, ⌃Space и подобные. Раскладушка заберёт его себе, и системное действие (Spotlight, смена языка) по нему больше не сработает, пока она запущена.")
-                if state.settings.overrideSystem && state.settings.hotkeyEnabled && !state.capturing && !state.isPaused {
-                    Label("Перехват не включился: нужно разрешение «Универсальный доступ».", systemImage: "exclamationmark.triangle")
-                        .font(.footnote).foregroundStyle(.orange)
+                Hint("Нажмите сочетание сразу после слова, чтобы перевести его или отменить автозамену. Если текст выделен — будет переведено выделение. Сочетанием могут быть одни модификаторы (⌃⇧) или двойное нажатие одной клавиши (⇧ ⇧) — так удобнее, если трудно зажимать несколько клавиш сразу.")
+                if state.settings.combo.isDoubleTap {
+                    LabeledContent(L("Пауза между двумя нажатиями: до %.1f с", state.settings.doubleTapInterval)) {
+                        Slider(value: $state.settings.doubleTapInterval, in: 0.2...1.0, step: 0.1).frame(width: 200)
+                            .accessibilityLabel(Text("Пауза между двумя нажатиями"))
+                    }
                 }
+                if AppState.allowsOverride {
+                    Toggle("Перехватывать системные сочетания", isOn: $state.settings.overrideSystem)
+                        .disabled(!state.settings.hotkeyEnabled)
+                    Hint("Позволяет назначить сочетание, занятое самой macOS: ⌘Space, ⌃Space и подобные. Раскладушка заберёт его себе, и системное действие (Spotlight, смена языка) по нему больше не сработает, пока она запущена.")
+                    if state.settings.overrideSystem && state.settings.hotkeyEnabled && !state.capturing && !state.isPaused {
+                        Label("Перехват не включился: нужно разрешение «Универсальный доступ».", systemImage: "exclamationmark.triangle")
+                            .font(.footnote).foregroundStyle(.orange)
+                    }
+                }
+            }
+
+            Section("Без сочетаний и разрешений") {
+                Hint("Выделите текст и выберите «Перевести раскладку» в меню программы → «Службы» или по правому щелчку. Этот способ работает в любом приложении и не требует разрешений.")
+                Button("Назначить службе своё сочетание…") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Shortcuts") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                Hint("В настройках клавиатуры macOS: «Сочетания клавиш» → «Службы» → «Текст» → «Перевести раскладку».")
             }
 
             Section("Отмена замены") {
@@ -236,7 +255,7 @@ private struct ExceptionsTab: View {
                         HStack {
                             Text(word).font(.body.monospaced())
                             Spacer()
-                            Button { state.removeException(word, app: scope) } label: { Image(systemName: "minus.circle") }
+                            Button { state.removeException(word, app: scope) } label: { Image(systemName: "minus.circle").accessibilityLabel(Text("Удалить")) }
                                 .buttonStyle(.borderless)
                         }
                     }
@@ -249,7 +268,7 @@ private struct ExceptionsTab: View {
                     HStack {
                         Text(appName(bundleID))
                         Spacer()
-                        Button { state.toggleExcluded(bundleID) } label: { Image(systemName: "minus.circle") }
+                        Button { state.toggleExcluded(bundleID) } label: { Image(systemName: "minus.circle").accessibilityLabel(Text("Удалить")) }
                             .buttonStyle(.borderless)
                     }
                 }
@@ -322,6 +341,45 @@ private struct FeedbackTab: View {
             Section("Надёжность") {
                 Toggle("Сообщать, если слежение за клавиатурой пришлось восстановить", isOn: $state.settings.notifyTapRestored)
                 Hint("macOS иногда отключает слежение за клавиатурой у программ. Раскладушка включает его обратно сама; с этой настройкой она ещё и скажет об этом.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Доступность
+
+private struct AccessibilityTab: View {
+    @EnvironmentObject private var state: AppState
+
+    var body: some View {
+        Form {
+            Section("Голос") {
+                Picker("Проговаривать исправления", selection: $state.settings.speakMode) {
+                    ForEach(SpeakMode.allCases) { Text($0.title).tag($0) }
+                }
+                Hint("Раскладушка вслух называет слово, которое получилось после замены, и сообщает об отмене. Без этого незрячий человек не узнает, что набранный текст изменился. При включённом VoiceOver используются его голос и скорость.")
+                Button("Проверить голос") {
+                    Speaker.shared.speak(L("Исправлено: %@", "привет"), language: Bundle.main.preferredLocalizations.first)
+                }
+            }
+
+            Section("Подсказка на экране") {
+                LabeledContent(L("Размер: %d%%", Int((state.settings.hudScale * 100).rounded()))) {
+                    Slider(value: $state.settings.hudScale, in: 1...3, step: 0.25).frame(width: 220)
+                        .accessibilityLabel(Text("Размер подсказки"))
+                }
+                Toggle("Высокий контраст", isOn: $state.settings.hudHighContrast)
+                Button("Показать пример") {
+                    Hud.shared.show(L("Исправлено: %@", "привет") + " · " + L("⌘Z — вернуть"),
+                                    position: state.settings.hudPosition, duration: max(state.settings.hudDuration, 2.5))
+                }
+                Hint("Системные настройки «Увеличить контраст», «Уменьшить прозрачность» и «Уменьшить движение» учитываются сами: подсказка становится контрастной, непрозрачной и появляется без анимации. Где её показывать и сколько держать — на вкладке «Отклик».")
+            }
+
+            Section("Клавиатура") {
+                Hint("Если трудно зажимать несколько клавиш сразу, назначьте перевод на двойное нажатие одной клавиши: на вкладке «Сочетания» нажмите на поле сочетания и дважды нажмите Shift, Control, Option или Command.")
+                Hint("Перевести выделенный текст можно и совсем без сочетаний — через меню «Службы» или правый щелчок.")
             }
         }
         .formStyle(.grouped)

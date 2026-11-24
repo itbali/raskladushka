@@ -1,4 +1,5 @@
 import SwiftUI
+import SwitcherCore
 
 struct PermissionRow: View {
     let title: LocalizedStringKey
@@ -29,12 +30,16 @@ struct ShortcutRecorder: View {
     @State private var held: NSEvent.ModifierFlags? = []
     /// Сочетание, которое нажали, но до окна оно не дошло: его забрала система.
     @State private var taken: String?
+    /// Один и тот же модификатор, нажатый дважды подряд, — сочетание «двойное нажатие».
+    @State private var taps = DoubleTapDetector(interval: 0.5)
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
             Button(recording ? L("Нажмите сочетание…") : combo.display) {
                 recording ? stop() : start()
             }
+            .accessibilityLabel(Text(L("Сочетание клавиш: %@", combo.display)))
+            .accessibilityHint(Text("Нажмите, затем наберите новое сочетание"))
             if let taken {
                 Text(taken)
                     .font(.footnote).foregroundStyle(.orange)
@@ -48,16 +53,25 @@ struct ShortcutRecorder: View {
         recording = true
         held = []
         taken = nil
+        taps.interrupted()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
             let flags = event.modifierFlags.intersection(KeyCombo.relevant)
             if event.type == .flagsChanged {
                 if !flags.isEmpty {
                     held?.formUnion(flags)
                 } else {
-                    // Одного модификатора мало: ⇧ или ⌘ постоянно нажимают сами по себе.
                     if let held, held.rawValue.nonzeroBitCount >= 2 {
                         combo = KeyCombo(keyCode: KeyCombo.modifiersOnly, modifiers: held.rawValue)
                         stop()
+                    } else if let held, held.rawValue.nonzeroBitCount == 1 {
+                        // Одного модификатора мало: ⇧ или ⌘ постоянно нажимают сами по себе.
+                        // А вот дважды подряд — уже сочетание.
+                        if taps.soloTap(held.rawValue, at: ProcessInfo.processInfo.systemUptime) {
+                            combo = KeyCombo(keyCode: KeyCombo.doubleTap, modifiers: held.rawValue)
+                            stop()
+                        }
+                    } else {
+                        taps.interrupted()
                     }
                     held = []
                 }
@@ -65,6 +79,7 @@ struct ShortcutRecorder: View {
             }
             held = nil
             taken = nil
+            taps.interrupted()
             if event.keyCode == 53 && flags.isEmpty { stop(); return nil }
             // Без ⌃, ⌥ или ⌘ сочетание мешало бы обычному набору.
             guard !flags.intersection([.control, .option, .command]).isEmpty else { NSSound.beep(); return nil }
@@ -100,7 +115,9 @@ struct ShortcutRecorder: View {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 if recording {
-                    taken = L("%@ забирает сама macOS. Включите «Перехватывать системные сочетания» ниже или выберите другое.", pressed.display)
+                    taken = AppState.allowsOverride
+                        ? L("%@ забирает сама macOS. Включите «Перехватывать системные сочетания» ниже или выберите другое.", pressed.display)
+                        : L("%@ забирает сама macOS — выберите другое сочетание.", pressed.display)
                 }
             }
         }

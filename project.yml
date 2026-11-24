@@ -15,8 +15,8 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
-    MARKETING_VERSION: "1.2.0"
-    CURRENT_PROJECT_VERSION: "4"
+    MARKETING_VERSION: "1.3.0"
+    CURRENT_PROJECT_VERSION: "5"
 targets:
   Raskladushka:
     type: application
@@ -39,6 +39,14 @@ targets:
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         ITSAppUsesNonExemptEncryption: false
         NSHumanReadableCopyright: © 2026 Aleksei Diuzhev
+        # Пункт «Перевести раскладку» в системном меню «Службы»: работает без разрешений.
+        NSServices:
+          - NSMenuItem:
+              default: Перевести раскладку
+            NSMessage: convertLayout
+            NSPortName: Raskladushka
+            NSSendTypes: [NSStringPboardType, public.utf8-plain-text]
+            NSReturnTypes: [NSStringPboardType, public.utf8-plain-text]
     entitlements:
       path: App/Raskladushka.entitlements
       properties:
@@ -75,6 +83,14 @@ targets:
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         ITSAppUsesNonExemptEncryption: false
         NSHumanReadableCopyright: © 2026 Aleksei Diuzhev
+        # Пункт «Перевести раскладку» в системном меню «Службы»: работает без разрешений.
+        NSServices:
+          - NSMenuItem:
+              default: Перевести раскладку
+            NSMessage: convertLayout
+            NSPortName: Raskladushka
+            NSSendTypes: [NSStringPboardType, public.utf8-plain-text]
+            NSReturnTypes: [NSStringPboardType, public.utf8-plain-text]
         # Обновления: список версий лежит в репозитории, подпись обновлений проверяется этим ключом.
         SUFeedURL: https://raw.githubusercontent.com/itbali/raskladushka/main/appcast.xml
         SUPublicEDKey: sLoZwqEGbCYGp0r8vI01sYsGO4wOyGRwdP/9BhxjmvE=

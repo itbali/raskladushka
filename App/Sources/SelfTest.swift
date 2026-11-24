@@ -77,7 +77,24 @@ enum SelfTest {
                   let ru = ids.first(where: { $0.contains("Russian") }) else {
                 finish("ОТМЕНЕНО: нужны английская и русская раскладки, есть \(ids)")
             }
-            func ours() -> Bool { onMain { window?.isKeyWindow ?? false } }
+            var returns = 0
+            /// Наше ли окно впереди. Если нет — до трёх раз за проверку возвращаем его сами: фокус на миг
+            /// уходит и от наших же действий (подсказка, вызов службы). Уходит снова — значит, за компьютером
+            /// работают, и проверка останавливается.
+            func ours() -> Bool {
+                if onMain({ window?.isKeyWindow ?? false }) { return true }
+                guard returns < 3 else { return false }
+                returns += 1
+                let front = onMain { NSWorkspace.shared.frontmostApplication?.localizedName ?? "?" }
+                note("        (окно проверки потеряло фокус, впереди «\(front)» — возвращаю, раз \(returns))")
+                onMain {
+                    NSApp.activate(ignoringOtherApps: true)
+                    window?.makeKeyAndOrderFront(nil)
+                    if let view { window?.makeFirstResponder(view) }
+                }
+                usleep(400_000)
+                return onMain { window?.isKeyWindow ?? false }
+            }
             /// Любое нажатие — только пока наше окно впереди.
             func key(_ code: CGKeyCode, _ flags: CGEventFlags = [], down: Bool? = nil) {
                 guard ours() else { finish("ОТМЕНЕНО: окно проверки ушло с переднего плана — запустите ещё раз и не трогайте клавиатуру") }
@@ -99,6 +116,7 @@ enum SelfTest {
                 onMain {
                     var settings = Settings()
                     settings.soundEnabled = false
+                    Speaker.shared.muted = true
                     change(&settings)
                     state.settings = settings
                     state.resume()
@@ -175,15 +193,19 @@ enum SelfTest {
             undoKey(); pause()
             check("⌘Z отменяет ручной перевод", text(), "руддщ")
 
-            // 4. Перехват системного сочетания ⌃Space.
+            // 4. Перехват системного сочетания ⌃Space — только в сборке с GitHub.
             fresh(ru) { $0.autoSwitch = false; $0.overrideSystem = true
                         $0.combo = KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags.control.rawValue) }
             pause(0.5)
-            check("перехват включился", onMain { state.capturing })
-            keys(hello); pause(0.3)
-            key(59, .maskControl, down: true); key(space, .maskControl); key(59, [], down: false); pause(0.8)
-            check("перехваченный ⌃Space переводит слово", text(), "hello")
-            check("система по ⌃Space язык не сменила", onMain { InputSources.currentID() }, en)
+            if AppState.allowsOverride {
+                check("перехват включился", onMain { state.capturing })
+                keys(hello); pause(0.3)
+                key(59, .maskControl, down: true); key(space, .maskControl); key(59, [], down: false); pause(0.8)
+                check("перехваченный ⌃Space переводит слово", text(), "hello")
+                check("система по ⌃Space язык не сменила", onMain { InputSources.currentID() }, en)
+            } else {
+                check("в сборке для App Store перехватчик остаётся «только чтение»", !onMain { state.capturing })
+            }
 
             // 5. Сочетание из одних модификаторов.
             fresh(ru) { $0.autoSwitch = false
@@ -192,6 +214,52 @@ enum SelfTest {
             key(59, .maskControl, down: true); key(56, [.maskControl, .maskShift], down: true)
             key(56, .maskControl, down: false); key(59, [], down: false); pause(0.8)
             check("⌃⇧ без клавиши переводит слово", text(), "hello")
+
+            // 5а. Двойное нажатие одного модификатора.
+            func tapShift() { key(56, .maskShift, down: true); key(56, [], down: false) }
+            fresh(ru) { $0.autoSwitch = false
+                        $0.combo = KeyCombo(keyCode: KeyCombo.doubleTap, modifiers: NSEvent.ModifierFlags.shift.rawValue) }
+            keys(hello); pause(0.3)
+            tapShift(); pause(0.8)
+            check("одно нажатие ⇧ ничего не переводит", text(), "руддщ")
+            tapShift(); usleep(120_000); tapShift(); pause(0.9)
+            check("двойное нажатие ⇧ переводит слово", text(), "hello")
+            fresh(ru) { $0.autoSwitch = false
+                        $0.combo = KeyCombo(keyCode: KeyCombo.doubleTap, modifiers: NSEvent.ModifierFlags.shift.rawValue) }
+            keys(hello); pause(0.3)
+            tapShift(); key(space); tapShift(); pause(0.8)
+            check("⇧, клавиша, ⇧ — не двойное нажатие", text(), "руддщ ")
+
+            // 5б. Голос и размер подсказки.
+            fresh(ru) { $0.speakMode = .always }
+            keys(hello + [space]); pause()
+            check("исправление проговаривается", onMain { Speaker.shared.lastSpoken ?? "" }, "hello")
+            let normal = onMain { Hud.shared.height }
+            undoKey(); pause()
+            check("отмена проговаривается", !(onMain { Speaker.shared.lastSpoken ?? "" }).isEmpty
+                  && onMain { Speaker.shared.lastSpoken } != "hello", onMain { Speaker.shared.lastSpoken ?? "" })
+            fresh(ru) { $0.hudScale = 2; $0.hudHighContrast = true }
+            keys(hello + [space]); pause()
+            check("подсказка увеличивается", onMain { Hud.shared.height } > normal * 1.6,
+                  onMain { "\(Hud.shared.height) против \(normal)" })
+            fresh(ru) { $0.speakMode = .off }
+            let spokenBefore = onMain { Speaker.shared.lastSpoken }
+            keys(hello + [space]); pause()
+            check("с выключенным голосом ничего не говорится", onMain { Speaker.shared.lastSpoken } == spokenBefore)
+
+            // 5в. Служба «Перевести раскладку»: без нажатий, текст приносит и уносит система.
+            do {
+                fresh(ru)
+                let board = NSPasteboard(name: NSPasteboard.Name("raskladushka-uitest"))
+                let done: Bool = onMain {
+                    board.clearContents()
+                    board.setString("ghbdtn vbh", forType: .string)
+                    return NSPerformService(Bundle.main.preferredLocalizations.first == "ru" ? "Перевести раскладку" : "Convert Keyboard Layout", board)
+                }
+                pause(0.5)
+                check("служба «Перевести раскладку» вызывается", done)
+                check("служба переводит текст", onMain { board.string(forType: .string) ?? "" }, "привет мир")
+            }
 
             // 6. Слово в двух раскладках.
             fresh(en)
@@ -303,9 +371,38 @@ enum SelfTest {
         }
     }
 
+    /// `Raskladushka --servicetest`: вызывает службу «Перевести раскладку» так, как это делает система,
+    /// и пишет, есть ли у приложения разрешения. Нажатий не отправляет вовсе — годится для копии
+    /// приложения, которой разрешения не выдавались. Итог — в tmp/servicetest.txt контейнера.
+    static func serviceTestIfRequested() {
+        guard CommandLine.arguments.contains("--servicetest") else { return }
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("servicetest.txt")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            let board = NSPasteboard(name: NSPasteboard.Name("raskladushka-servicetest"))
+            board.clearContents()
+            board.setString("ghbdtn vbh", forType: .string)
+            // Название пункта — из Info.plist, с переводом из ServicesMenu.strings, если он есть.
+            let services = Bundle.main.infoDictionary?["NSServices"] as? [[String: Any]]
+            let title = (services?.first?["NSMenuItem"] as? [String: String])?["default"] ?? "Перевести раскладку"
+            let shown = Bundle.main.localizedString(forKey: title, value: title, table: "ServicesMenu")
+            let done = NSPerformService(shown, board)
+            let lines = [
+                "пункт меню: \(shown), порт: \(ServiceProvider.portName)",
+                "идентификатор: \(Bundle.main.bundleIdentifier ?? "?")",
+                "право отправлять нажатия: \(AppState.hasPostAccess), право читать нажатия: \(CGPreflightListenEventAccess())",
+                "служба вызвана: \(done)",
+                "результат: \(board.string(forType: .string) ?? "")",
+                "обработано этим процессом: \(ServiceProvider.shared.handled)",
+            ]
+            try? lines.joined(separator: "\n").write(to: log, atomically: true, encoding: .utf8)
+            exit(0)
+        }
+    }
+
     static func runIfRequested() {
         renderIfRequested()
         uiTestIfRequested()
+        serviceTestIfRequested()
         guard CommandLine.arguments.contains("--selftest") else { return }
         let sources = InputSources()
         print("sandbox:", ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] ?? "no")

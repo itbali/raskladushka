@@ -46,6 +46,16 @@ final class AppState: ObservableObject {
     var isPaused: Bool { pausedUntil.map { $0 > Date() } ?? false }
     private var working: Bool { (settings.autoSwitch || settings.hotkeyEnabled) && !isPaused }
 
+    /// Перехват системных сочетаний есть только в сборке с GitHub. В сборке для App Store перехватчик
+    /// всегда «только чтение» — так и написано проверяющим Apple.
+    static let allowsOverride: Bool = {
+        #if DIRECT
+        return true
+        #else
+        return false
+        #endif
+    }()
+
     let defaults: UserDefaults
     private let inputSources = InputSources()
     private let tap = KeyboardTap()
@@ -64,6 +74,7 @@ final class AppState: ObservableObject {
     /// Модификаторы, зажатые с момента, когда не было зажато ни одного; `nil` — в эту серию
     /// вмешалась клавиша или мышь, и сочетанием из одних модификаторов она уже не станет.
     private var heldModifiers: NSEvent.ModifierFlags? = []
+    private var doubleTap = DoubleTapDetector()
     private var askedListenAccess = false
     /// Перехватчик уже работал — если он вдруг остановится, это стоит заметить.
     private var tapWasRunning = false
@@ -121,6 +132,7 @@ final class AppState: ObservableObject {
         Updater.shared.automatic = settings.autoUpdate
         #endif
         configureSession()
+        configureFeedback()
         updateLanguage()
         registerHotKey()
         refresh()
@@ -133,6 +145,7 @@ final class AppState: ObservableObject {
     /// Раздаёт настройки частям, которые по ним работают.
     private func applySettings(old: Settings) {
         configureSession()
+        configureFeedback()
         if settings.journalLimit < journal.count { journal.removeLast(journal.count - settings.journalLimit) }
         if !settings.journalEnabled, !journal.isEmpty { journal.removeAll() }
         if settings.hotkeyEnabled != old.hotkeyEnabled || settings.combo != old.combo
@@ -144,6 +157,12 @@ final class AppState: ObservableObject {
         if settings.autoUpdate != old.autoUpdate { Updater.shared.automatic = settings.autoUpdate }
         #endif
         syncUndoKeys()
+    }
+
+    private func configureFeedback() {
+        Hud.shared.scale = settings.hudScale
+        Hud.shared.highContrast = settings.hudHighContrast
+        doubleTap.interval = settings.doubleTapInterval
     }
 
     private var frontmostBundleID: String { NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "" }
@@ -185,7 +204,7 @@ final class AppState: ObservableObject {
         if let until = pausedUntil, until <= Date() { resume() }
         if working {
             // Активный перехват требует «Универсального доступа»; не дали или не вышло — работаем как обычно.
-            let active = settings.overrideSystem && settings.hotkeyEnabled && post
+            let active = Self.allowsOverride && settings.overrideSystem && settings.hotkeyEnabled && post
             if running, tap.isActive != active { tap.stop(); running = false; tapWasRunning = false }
             if !running, post || listen {
                 running = (active && tap.start(active: true)) || tap.start()
@@ -457,7 +476,7 @@ final class AppState: ObservableObject {
             inputSources.select(result.targetLayoutID)
             session.rememberUndo(deleteCount: result.text.count, insert: text, switchTo: context.current.id,
                                  redoInsert: result.text, redoSwitchTo: result.targetLayoutID)
-            report(.init(kind: .selection, before: text, after: result.text, words: 0))
+            report(.init(kind: .selection, before: text, after: result.text, words: 0), layoutID: result.targetLayoutID)
             syncUndoKeys()
             return
         }
@@ -468,7 +487,7 @@ final class AppState: ObservableObject {
         injector.paste()
         inputSources.select(result.targetLayoutID)
         session.reset()
-        report(.init(kind: .selection, before: text, after: result.text, words: 0))
+        report(.init(kind: .selection, before: text, after: result.text, words: 0), layoutID: result.targetLayoutID)
         // Вставка читает буфер чуть позже — возвращаем прежнее содержимое с задержкой.
         copied = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { snapshot.restore(to: pasteboard) }
@@ -496,17 +515,25 @@ final class AppState: ObservableObject {
             } else {
                 let held = heldModifiers
                 heldModifiers = []
-                if settings.hotkeyEnabled, settings.combo.isModifiersOnly, recordingProbe == nil, held == settings.combo.flags {
-                    DispatchQueue.main.async { [weak self] in self?.hotKeyPressed() }
+                // Модификаторы нажали и отпустили, не тронув больше ничего (`held` не nil).
+                guard settings.hotkeyEnabled, recordingProbe == nil, let held, held == settings.combo.flags else {
+                    doubleTap.interrupted()
+                    return
                 }
+                let fired = settings.combo.isModifiersOnly
+                    || (settings.combo.isDoubleTap && doubleTap.soloTap(held.rawValue, at: ProcessInfo.processInfo.systemUptime))
+                if fired { DispatchQueue.main.async { [weak self] in self?.hotKeyPressed() } }
             }
         case .captured(let keyCode, let flags, let isRepeat):
             heldModifiers = nil
+            doubleTap.interrupted()
             if let recordingProbe { recordingProbe(keyCode, flags) } else if !isRepeat { hotKeyPressed() }
         case .mouseDown:
+            doubleTap.interrupted()
             if !KeyCombo.modifiers(CGEventSource.flagsState(.combinedSessionState)).isEmpty { heldModifiers = nil }
             if !frontmostIsTerminal { session.reset() }
         case .keyDown(let keyCode, let flags):
+            doubleTap.interrupted()
             if !KeyCombo.modifiers(flags).isEmpty { heldModifiers = nil }
             if let recordingProbe { recordingProbe(keyCode, flags); return }
             if settings.hotkeyEnabled, settings.combo.matches(keyCode: keyCode, flags: flags) { return }
@@ -553,8 +580,22 @@ final class AppState: ObservableObject {
             removeException(word, app: nil)
             removeException(word, app: frontmostBundleID)
         }
-        if let info = replacement.info { report(info) }
+        if let info = replacement.info { report(info, layoutID: replacement.switchTo) }
         syncUndoKeys()
+    }
+
+    // MARK: Служба «Перевести раскладку»
+
+    /// Перевод текста для системного меню «Службы». Нажатий не читает и не отправляет — поэтому
+    /// работает без единого разрешения: текст приносит и забирает сама система.
+    func convertForService(_ text: String) -> String? {
+        guard let context = inputSources.context(),
+              let result = SelectionConverter.convert(text, context: context) else { return nil }
+        inputSources.select(result.targetLayoutID)
+        session.reset()
+        report(.init(kind: .selection, before: text, after: result.text, words: 0), layoutID: result.targetLayoutID)
+        syncUndoKeys()
+        return result.text
     }
 
     /// Слово, автозамену которого отменили, — в исключения: общие, приложения или никуда, как настроено.
@@ -574,8 +615,27 @@ final class AppState: ObservableObject {
         if journal.count > settings.journalLimit { journal.removeLast(journal.count - settings.journalLimit) }
     }
 
-    private func report(_ info: Replacement.Info) {
+    /// Проговаривать ли исправления: всегда или только незрячим пользователям с включённым VoiceOver.
+    private var speaks: Bool {
+        switch settings.speakMode {
+        case .off: return false
+        case .voiceOver: return NSWorkspace.shared.isVoiceOverEnabled
+        case .always: return true
+        }
+    }
+
+    /// `layoutID` — раскладка, в которой текст оказался после замены: по ней выбирается голос.
+    private func report(_ info: Replacement.Info, layoutID: String? = nil) {
         let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
+        if speaks {
+            let language = inputSources.tables.first { $0.id == layoutID }?.language
+            let interface = Bundle.main.preferredLocalizations.first
+            switch info.kind {
+            case .auto, .redo, .manual: Speaker.shared.speak(info.after, language: language)
+            case .undo: Speaker.shared.speak(L("Отменено"), language: interface)
+            case .selection: Speaker.shared.speak(L("Выделение переведено"), language: interface)
+            }
+        }
         record(JournalEntry(kind: Self.title(info.kind), before: info.before, after: info.after,
                             reason: info.reason.map(Self.title) ?? "", app: app))
         switch info.kind {

@@ -1,6 +1,6 @@
 # Политика конфиденциальности «Раскладушки» / Raskladushka Privacy Policy
 
-_Действует с 15 ноября 2026 г. / Effective November 15, 2026_
+_Действует с 24 ноября 2026 г. / Effective November 24, 2026_
 
 ## Русский
 
@@ -19,6 +19,10 @@ _Действует с 15 ноября 2026 г. / Effective November 15, 2026_
   сочетанием клавиш (по ним приложение учится исправлять их автоматически, это можно отключить).
   Всё это удаляется вместе с приложением.
 - Журнал последних замен хранится только в оперативной памяти и пропадает при выходе из приложения.
+- Если включено проговаривание исправлений, речь синтезируется на вашем Mac; текст никуда не передаётся.
+- Разрешение «Универсальный доступ» необязательно. Оно нужно, чтобы перепечатать слово в окне, где вы
+  набираете текст; содержимое чужих окон приложение не читает. Без разрешения работает перевод выделенного
+  текста через системное меню «Службы».
 
 Вопросы: <адрес поддержки>.
 
@@ -38,5 +42,9 @@ Raskladushka does not collect, store or transmit any personal data.
   (the app learns to correct them automatically; this can be turned off). All of it is removed together
   with the app.
 - The log of recent corrections is kept only in memory and is gone when the app quits.
+- If spoken corrections are turned on, speech is synthesized on your Mac; the text is not sent anywhere.
+- The Accessibility permission is optional. It is needed to retype a word in the window you are typing in;
+  the app does not read the contents of other apps’ windows. Without the permission you can still convert
+  selected text through the system Services menu.
 
 Questions: <support address>.

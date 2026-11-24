@@ -30,5 +30,29 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Aleksei Diuzhev</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Перевести раскладку</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>convertLayout</string>
+			<key>NSPortName</key>
+			<string>Raskladushka</string>
+			<key>NSReturnTypes</key>
+			<array>
+				<string>NSStringPboardType</string>
+				<string>public.utf8-plain-text</string>
+			</array>
+			<key>NSSendTypes</key>
+			<array>
+				<string>NSStringPboardType</string>
+				<string>public.utf8-plain-text</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

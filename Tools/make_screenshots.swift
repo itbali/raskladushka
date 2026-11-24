@@ -193,7 +193,8 @@ render("03-menu", background: "bg3") {
     }
 
     let rep = settings.representations[0]
-    let scale: CGFloat = 1.16
+    // Окно настроек с вкладками шире прежнего — вписываем его в ту же ширину, чтобы не закрыть меню слева.
+    let scale: CGFloat = min(1.16, 1114 / CGFloat(rep.pixelsWide))
     let size = NSSize(width: CGFloat(rep.pixelsWide) * scale, height: CGFloat(rep.pixelsHigh) * scale)
     image(settings, in: NSRect(x: W - size.width - 250, y: 1230 - size.height + 100, width: size.width, height: size.height), radius: 30, shadow: true)
 }
